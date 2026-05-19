@@ -1,6 +1,6 @@
 extends Spatial
 
-onready var spider = $".."
+onready var mob = $".."
 onready var animation_player = $"../AnimationPlayer"
 onready var base_atk_area = $base_atk
 onready var aim = $Aim
@@ -12,18 +12,18 @@ var target = null
 
 
 
-func combat():
+func combat()->void:
 	combatAnimations()
 	target = null
 	var highest_aggro = 0
-	for aggro_target in spider.targets:
+	for aggro_target in mob.targets:
 		if is_instance_valid(aggro_target.target_entity):
 			if aggro_target.aggro > highest_aggro:
 				highest_aggro = aggro_target.aggro
 				target = aggro_target.target_entity
 	var distance = -1
 	if target:
-		distance = spider.global_transform.origin.distance_to(target.global_transform.origin)
+		distance = mob.global_transform.origin.distance_to(target.global_transform.origin)
 		if distance <= base_atk_dist:
 			sequenceMelee(target)
 		elif distance <= range_atk1_dist:
@@ -56,7 +56,6 @@ var base_wait_unlock = false
 var melee_step = 0
 var can_move:bool = true
 var anim_locks = {
-	"base_atk":false,
 	"atk1":false,
 	"atk2":false,
 	"atk3":false,
@@ -74,15 +73,53 @@ func sequenceMelee(target):
 	if target.is_moving:
 		base_wait_unlock = false
 		melee_step = 0
-	if stats.health <= stats.max_health/2:
+	if stats.health <= stats.max_health / 2:
 		if !self_buff_used:
-			lockAnim("scream")
+			if animation_player.has_animation("scream"):
+				lockAnim("scream")
 		else:
 			sequenceMeleeContinue()
 	else:
 		sequenceMeleeContinue()
-	
-func sequenceMeleeContinue():
+
+func sequenceMeleeContinue()->void:
+	match mob.stats.species:
+		"spider":
+			spiderMeleeSec()
+		"horse":
+			horseSec()
+
+
+func spiderMeleeSec()->void:
+	if !base_wait_unlock:
+		if melee_step % 2 == 0:
+			if CommonBehaviours.checkHealth(mob):
+				if randf() <= mob.stats.parry_chance:
+					lockAnim("parry")
+				else:
+					lockAnim("atk1")
+			else:
+				lockAnim("atk1")
+			base_wait_unlock = true
+		elif melee_step == 1:
+			lockAnim("atk2")
+			base_wait_unlock = true
+
+		elif melee_step == 3:
+			lockAnim("atk3")
+			base_wait_unlock = true
+
+		elif melee_step == 5:
+			lockAnim("atk4")
+			base_wait_unlock = true
+
+		elif melee_step == 7:
+			lockAnim("atk5")
+			base_wait_unlock = true
+
+
+
+func horseSec()->void:
 	if !base_wait_unlock:
 		if melee_step % 2 == 0:
 			lockAnim("atk1")
@@ -93,49 +130,31 @@ func sequenceMeleeContinue():
 		elif melee_step == 3:
 			lockAnim("atk3")
 			base_wait_unlock = true
-		elif melee_step == 5:
-			lockAnim("atk4")
-			base_wait_unlock = true
-		elif melee_step == 7:
-			lockAnim("atk5")
-			base_wait_unlock = true
 
-func combatAnimations():
-	if anim_locks["base_atk"]:
-		animation_player.play("base_atk",blend)
 
-	elif anim_locks["atk1"]:
+func combatAnimations()->void:
+	if anim_locks["atk1"]:
 		animation_player.play("atk1",blend,1.3)
-
 	elif anim_locks["atk2"]:
 		animation_player.play("atk2",blend,1.4)
-
 	elif anim_locks["atk3"]:
 		animation_player.play("atk3",blend,1.5)
-
 	elif anim_locks["atk4"]:
 		animation_player.play("atk1",blend,3)
-
 	elif anim_locks["atk5"]:
 		animation_player.play("atk5",blend,1.6)
-
 	elif anim_locks["range1"]:
 		animation_player.play("range1",blend,1.3)
-
 	elif anim_locks["range2"]:
 		animation_player.play("range2",blend)
-
 	elif anim_locks["aoe1"]:
 		animation_player.play("aoe1",blend)
-
 	elif anim_locks["parry"]:
 		animation_player.play("parry",blend)
-
 	elif anim_locks["scream"]:
 		animation_player.play("scream",blend)
-
 	else:
-		if spider.is_moving:
+		if mob.is_moving:
 			can_move = true
 			animation_player.play("run_cycle")
 		else:
@@ -171,7 +190,7 @@ func dashForward(dash_distance:float):
 		power = dash_distance * 0.3
 	else:
 		power = dash_distance
-	dash_direction = spider.global_transform.basis.z.normalized()
+	dash_direction = mob.global_transform.basis.z.normalized()
 	tween.stop_all()
 	tween.interpolate_method(self,"updateDash",power,0.0,0.15,Tween.TRANS_QUAD,Tween.EASE_OUT)
 	tween.start()
@@ -179,32 +198,32 @@ func dashForward(dash_distance:float):
 func updateDash(power):
 	var delta_power = power + dash_power
 	dash_power = power
-	spider.move_and_slide(dash_direction * delta_power * Engine.iterations_per_second)
+	mob.move_and_slide(dash_direction * delta_power * Engine.iterations_per_second)
 	if power <= 0:
 		dash_power = 0
 
 
-func lookTarget():
+func lookTarget()->void:
 	if target:
-		var target_pos = spider.global_transform.origin - (target.global_transform.origin - spider.global_transform.origin)
-		target_pos.y = spider.global_transform.origin.y
-		var target_transform = spider.global_transform.looking_at(target_pos,Vector3.UP)
-		spider.global_transform.basis = spider.global_transform.basis.slerp(target_transform.basis,0.1)
+		var target_pos = mob.global_transform.origin - (target.global_transform.origin - mob.global_transform.origin)
+		target_pos.y = mob.global_transform.origin.y
+		var target_transform = mob.global_transform.looking_at(target_pos,Vector3.UP)
+		mob.global_transform.basis = mob.global_transform.basis.slerp(target_transform.basis,0.1)
 
 func rotateToTarget(speed:float):
 	if target:
 		if !base_atk_area.get_overlapping_bodies().has(target):
-			var direction = (target.global_transform.origin - spider.global_transform.origin).normalized()
+			var direction = (target.global_transform.origin - mob.global_transform.origin).normalized()
 			direction.y = 0
 
 			if direction.length_squared() > 0.0001:
-				var current_direction = spider.global_transform.basis.z.normalized()
+				var current_direction = mob.global_transform.basis.z.normalized()
 				var target_rotation = current_direction.linear_interpolate(direction,speed)
 
 				var look_at_rotation = Basis()
 				look_at_rotation = look_at_rotation.rotated(Vector3.UP,atan2(target_rotation.x,target_rotation.z))
 
-				spider.global_transform.basis = look_at_rotation
+				mob.global_transform.basis = look_at_rotation
 
 func updateDebug(distance):
 	var locked = []
@@ -222,9 +241,9 @@ func updateDebug(distance):
 		"\nUnlocked: " + str(unlocked))
 
 
-func lockMov():
+func lockMov()->void:
 	can_move = false
-func unlockMov():
+func unlockMov()->void:
 	can_move = true 
 func lockAnim(anim_name):
 	for key in anim_locks:
@@ -233,27 +252,24 @@ func lockAnim(anim_name):
 func callAnimLock(anim_name):
 	anim_locks[anim_name] = false
 	base_wait_unlock = false
-func callAnimAllLock():
+func callAnimAllLock()->void:
 	for key in anim_locks:
 		anim_locks[key] = false
 	base_wait_unlock = false
-func callAnimRangeUse():
+func callAnimRangeUse()->void:
 	range_used = true
 	
-func callConsumeSelfBuff():
+func callConsumeSelfBuff()->void:
 	self_buff_used = true
 
-func callAnimMeleeSeqUP():
+func callAnimMeleeSeqUP()->void:
 	melee_step += 1
-
 	if melee_step > 7:
 		melee_step = 0
 
-func base_atk():
+func base_atk()->void:
 	for body in base_atk_area.get_overlapping_bodies():
 		if body.is_in_group("Entity"):
-			if body.stats.species == "spider":
-				pass
-			else:
+			if body.stats.species != mob.stats.species:
 				if body.has_method("get_hit"):
-					body.get_hit(spider,10)
+					body.get_hit(mob,10)

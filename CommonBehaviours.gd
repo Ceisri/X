@@ -28,12 +28,21 @@ func floor_slope(mob):
 							var normal = ray.get_collision_normal()
 							var slope = rad2deg(acos(normal.dot(Vector3.UP)))
 							return slope
-
 	return 0
+#_______________________________________________________________________________
+func checkHealth(mob)->bool:
+	if mob.stats.last_health == -1:
+		mob.stats.last_health = mob.stats.health
 
+	if mob.stats.health < mob.stats.last_health:
+		mob.stats.last_damage_time = OS.get_ticks_msec()
 
+	mob.stats.last_health = mob.stats.health
 
+	if (OS.get_ticks_msec() - mob.stats.last_damage_time) <= mob.stats.damage_check_window:
+		return true
 
+	return false
 #_______________________________________________________________________________
 func updateAnimation(mob):
 	var animation_player = mob.get_node("AnimationPlayer")
