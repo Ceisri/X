@@ -1,0 +1,122 @@
+[gd_resource type="ShaderMaterial" load_steps=5 format=2]
+
+[ext_resource path="res://world/Spawnable/shaders/Puddle AOE/text/splatter2.png" type="Texture" id=1]
+[ext_resource path="res://world/Spawnable/shaders/Puddle AOE/text/Milky_13-256x256.png" type="Texture" id=2]
+[ext_resource path="res://world/Spawnable/shaders/Puddle AOE/text/Milky_06-256x256.png" type="Texture" id=3]
+
+[sub_resource type="Shader" id=3]
+code = "shader_type spatial;
+render_mode unshaded, cull_disabled;
+
+uniform sampler2D albedo_tex;
+uniform sampler2D noise_tex;
+uniform sampler2D splatter_tex;
+
+uniform vec4 poison_color : hint_color = vec4(0.4, 1.0, 0.2, 1.0);
+
+uniform float cloud_speed = 0.03;
+uniform float boil_speed = 0.015;
+uniform float noise_strength = 0.08;
+
+uniform vec2 uv_scale = vec2(2.0);
+
+uniform vec2 splatter_scale = vec2(2.5);
+uniform float mask_cutoff = 0.15;
+uniform float edge_softness = 0.08;
+
+void fragment() {
+	vec2 uv = UV * uv_scale;
+
+	vec2 noise_uv1 = uv + vec2(
+		TIME * cloud_speed,
+		TIME * boil_speed
+	);
+
+	vec2 noise_uv2 = uv * 0.7 - vec2(
+		TIME * boil_speed,
+		TIME * cloud_speed
+	);
+
+	vec2 flow = (
+		texture(noise_tex, noise_uv1).rg +
+		texture(noise_tex, noise_uv2).rg
+	) - 1.0;
+
+	flow *= noise_strength;
+
+	vec4 cloud = texture(
+		albedo_tex,
+		uv + flow
+	);
+
+	// single non-repeating splatter
+	vec2 splat_uv = UV * splatter_scale;
+
+	splat_uv -= (
+		splatter_scale - vec2(1.0)
+	) * 0.5;
+
+	splat_uv += flow * 0.1;
+
+	splat_uv = clamp(
+		splat_uv,
+		vec2(0.001),
+		vec2(0.999)
+	);
+
+	float mask = texture(
+		splatter_tex,
+		splat_uv
+	).r;
+
+	mask = smoothstep(
+		mask_cutoff,
+		mask_cutoff + edge_softness,
+		mask
+	);
+
+	// round overall shape
+	vec2 center_uv = UV - vec2(0.5);
+
+	float radial = length(
+		center_uv
+	);
+
+	float circle = smoothstep(
+		0.5,
+		0.35,
+		radial
+	);
+
+	float bubble = texture(
+		noise_tex,
+		uv * 1.5 + TIME * 0.02
+	).r;
+
+	vec3 color = cloud.rgb;
+
+	color *= poison_color.rgb;
+	color *= 0.8 + bubble * 0.3;
+
+	ALBEDO = color;
+
+	ALPHA = (
+		mask *
+		circle *
+		poison_color.a
+	);
+}"
+
+[resource]
+shader = SubResource( 3 )
+shader_param/poison_color = Color( 0.0627451, 0.254902, 0, 0.682353 )
+shader_param/cloud_speed = 0.03
+shader_param/boil_speed = 0.015
+shader_param/noise_strength = 0.111
+shader_param/uv_scale = Vector2( 2, 2 )
+shader_param/splatter_scale = Vector2( 1, 1 )
+shader_param/mask_cutoff = 0.15
+shader_param/edge_softness = 0.08
+shader_param/albedo_tex = ExtResource( 2 )
+shader_param/noise_tex = ExtResource( 3 )
+shader_param/splatter_tex = ExtResource( 1 )
