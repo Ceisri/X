@@ -1,15 +1,19 @@
 extends KinematicBody
 
 onready var stats = $Stats
+onready var combat = $Combat
 onready var behaviour =$NPCBehaviour
 onready var ray_forward =$RayForward
 onready var ray_left = $RayFrontLeft
 onready var ray_right = $RayFrontRight
 
+onready var ray_wall_check = $RayWall
+onready var ray_height_check = $RayHeight
+
 onready var ray_down =$RayDown
 onready var melee_ray =$RayMelee
 onready var animation =$AnimationPlayer
-
+onready var dmg_area = $AreaDamage
 
 var nav_path = []
 var nav_index = 0
@@ -21,7 +25,9 @@ onready var nav = get_parent().get_node("Terrain")
 var is_walking:bool = true
 var is_running:bool = false
 var is_sitting:bool = false
+var is_swimming:bool = false
 var is_dead:bool = false
+
 var on_guard:bool = false 
 
 var target: Node = null
@@ -31,7 +37,7 @@ class AggroTarget:
 	var target_entity : Node
 	var aggro : int
 	
-var melee_step = 0
+var melee_step = 1
 var can_move:bool = true
 var anim_locks = {
 	"atk1":false,
@@ -39,6 +45,7 @@ var anim_locks = {
 	"atk3":false,
 	"atk4":false,
 	"atk5":false,
+	"atk6":false,
 	"stop_run":false,
 	"parry":false,
 	"sit":false,
@@ -46,8 +53,9 @@ var anim_locks = {
 	"scream":false,
 	"die":false,
 	"prepare":false,
-	"staggered":false
+	"staggered":false,
 }
+
 func _physics_process(delta):
 	animations()
 	if Engine.get_physics_frames() % 2 == 0:
@@ -69,7 +77,8 @@ func switchState():
 		if target == null:
 			wander()
 		else:
-			combat()
+			combat.combat()
+			
 	else:
 		can_move = false
 		target = null
@@ -81,60 +90,8 @@ func switchState():
 export var melee_distance:float = 2.0
 var pack_slots = {}
 
-func combat():
-	rotateToTarget(0.1)
-	var direction = (target.global_transform.origin - global_transform.origin).normalized()
-	var distance = global_transform.origin.distance_to(target.global_transform.origin)
-	for lock in anim_locks.values():
-		if lock:
-			can_move = false
-			break
-	set_meta("dir",-direction)
-	if distance <= melee_distance or (melee_ray.is_colliding() and melee_ray.get_collider() == target):
-		is_walking = false
-		is_running = false
-		sequenceMeleeContinue()
-		return
-	if !can_move:
-		is_walking = false
-		is_running = false
-		return
-	is_walking = false
-	is_running = true
-	move_and_slide(direction * stats.run_speed)
-
-func rotateToTarget(speed:float):
-	if !target:
-		return
-	var direction = (target.global_transform.origin- global_transform.origin).normalized()
-	direction.y = 0
-	if direction.length_squared() <= 0.001:
-		return
-	var target_pos = (global_transform.origin- direction)
-	target_pos.y = global_transform.origin.y
-	var target_transform = global_transform.looking_at(target_pos,Vector3.UP)
-	global_transform.basis = (global_transform.basis.slerp(target_transform.basis,speed))
 
 
-#_______________________________________________________________________________
-func sequenceMeleeContinue():
-	if melee_step > 7:
-		melee_step = 0
-	if melee_step == 0 or melee_step == 1:
-		lockAnim("atk1")
-	elif melee_step == 2:
-		lockAnim("prepare")
-	elif melee_step == 3:
-		lockAnim("atk2")
-	elif melee_step == 4:
-		lockAnim("prepare")
-	elif melee_step == 5:
-		lockAnim("atk3")
-	elif melee_step == 6:
-		lockAnim("atk1")
-	elif melee_step == 7:
-		lockAnim("atk4")
-		
 #_______________________________________________________________________________
 func wander():
 	updateState()
@@ -145,7 +102,6 @@ func wander():
 			sitStateSwitch()
 			return
 		if is_sitting and !anim_locks["stop_sit"]:
-			lockAnim("stop_sit")
 			is_sitting = false
 		movementStateSwitch()
 		if CommonBehaviours.obstacleAvoid(self):
@@ -156,21 +112,24 @@ func wander():
 			moveforward()
 			rotateMob()
 func sitStateSwitch():
-	if animation.has_animation("sit"):
-		if !get_meta("is_stopped"):
-			return
-		if anim_locks["stop_sit"]:
-			return
-		var time = OS.get_ticks_msec()
-		if !has_meta("sit_next"):
-			set_meta("sit_next",time + int(rand_range(3000,12000)))
-			return
-		if time >= get_meta("sit_next"):
-			set_meta("sit_next",time + int(rand_range(8000,30000)))
-			if randf() <= 0.5:
-				is_sitting = true
-				can_move = false
-				anim_locks["sit"] = true
+	if target == null:
+		if animation.has_animation("sit"):
+			if !get_meta("is_stopped"):
+				return
+			if anim_locks["stop_sit"]:
+				return
+			var time = OS.get_ticks_msec()
+			if !has_meta("sit_next"):
+				set_meta("sit_next",time + int(rand_range(3000,12000)))
+				return
+			if time >= get_meta("sit_next"):
+				set_meta("sit_next",time + int(rand_range(8000,30000)))
+				if randf() <= 0.5:
+					is_sitting = true
+					can_move = false
+					anim_locks["sit"] = true
+	else:
+		anim_locks["sit"] = false
 #_________________________________Movement______________________________________
 func moveforward():
 	if can_move == true:
@@ -179,6 +138,7 @@ func moveforward():
 				return
 			if nav_index >= nav_path.size():
 				nav_path.clear()
+				nav_index = 0
 				return
 			var next_pos = nav_path[nav_index]
 			var dir = (next_pos - global_transform.origin)
@@ -211,6 +171,11 @@ func movementStateSwitch():
 		else:
 			is_running = true
 			is_walking = false
+			
+			
+var last_yaw = 0.0
+var turn_anim = ""
+var run_turn_anim = ""
 func rotateMob():
 	var dir = get_meta("dir") if has_meta("dir") else Vector3.ZERO
 	if dir == Vector3.ZERO:
@@ -219,6 +184,20 @@ func rotateMob():
 	target_pos.y = global_transform.origin.y
 	var target_transform = global_transform.looking_at(target_pos,Vector3.UP)
 	global_transform.basis = global_transform.basis.slerp(target_transform.basis,0.1)
+
+	var yaw = rotation.y
+	var delta = wrapf(yaw - last_yaw,-PI,PI)
+
+	if !is_walking and !is_running:
+		if abs(delta) > 0.02:
+			if delta > 0:
+				turn_anim = "turn_l"
+			else:
+				turn_anim = "turn_r"
+		else:
+			turn_anim = ""
+
+	last_yaw = yaw
 func updateState():
 	var frames = Engine.get_physics_frames()
 
@@ -234,17 +213,19 @@ func updateState():
 		if stopped:
 			nav_path.clear()
 			nav_index = 0
+		else:
+			set_meta("next_switch",0)
 
 		set_meta("is_stopped",stopped)
 		set_meta("is_moving",!stopped)
 		set_meta("state_next",frames + int(rand_range(120,600)))
 func switchDirection():
-	if nav_path.size() > 0:
+	if nav_path.size() > 0 and nav_index < nav_path.size():
 		return
 	var frames = Engine.get_physics_frames()
 	var next = get_meta("next_switch") if has_meta("next_switch") else 0
 	if frames >= next:
-		set_meta("next_switch",frames + int(rand_range(100,4000)))
+		set_meta("next_switch",frames + int(rand_range(30,300)))
 		var origin = global_transform.origin
 		var random_pos = origin + Vector3(rand_range(-25,25),0,rand_range(-25,25))
 		random_pos = nav.get_closest_point(random_pos)
@@ -330,7 +311,7 @@ func debug(rich_text_label):
 
 	rich_text_label.text = \
 	"can move: " + str(can_move) + "\n" + \
-	"sequence: " + str(melee_step) + "\n" + \
+	"sequence: " + str(combat.melee_step) + "\n" + \
 	"Targets: " + str(targets.size()) + "\n" + \
 	"Aggro:\n" + aggro_info + \
 	"Anim: " + str(anim) + "\n" + \
@@ -342,6 +323,7 @@ func debug(rich_text_label):
 	"Walking: " + str(is_walking) + "\n" + \
 	"Running: " + str(is_running) + "\n" + \
 	"Dir: " + str(dir) + "\n" + \
+	"thirst: " + str(stats.hydration) + "\n" + \
 	"Walk Speed: " + str(stats.walk_speed) + "\n" + \
 	"Run Speed: " + str(stats.run_speed) + "\n" + \
 	"Pos: " + str(global_transform.origin) + "\n" + \
@@ -351,13 +333,221 @@ func debug(rich_text_label):
 	"Dir Switch: " + str(next_switch)
 #_______________________________Animation_______________________________________
 var blend = 0.25
+func playAnim(anim_name:String,anim_blend:float = blend):
+	if animation.current_animation != anim_name:
+		animation.play(anim_name,anim_blend)
+
+func playDeath()->bool:
+	if stats.health > 0:
+		return false
+
+	if anim_locks["die"]:
+		playAnim("die")
+	else:
+		playAnim("dead")
+
+	return true
+
+var turn_break_counter = 0
+var turn_break_limit = 2
+func playTurn()->bool:
+	if turn_anim == "" or is_walking or is_running:
+		turn_break_counter = 0
+		return false
+
+	if !target:
+		turn_break_counter = 0
+		return false
+
+	var distance = global_transform.origin.distance_to(target.global_transform.origin)
+
+	if distance > melee_distance:
+		turn_break_counter = 0
+		return false
+
+	turn_break_counter += 1
+
+	if turn_break_counter >= turn_break_limit:
+		turn_break_counter = 0
+
+		for key in anim_locks:
+			anim_locks[key] = false
+
+		can_move = true
+
+	playAnim(turn_anim)
+
+	return true
+
+func playLocks()->bool:
+	if anim_locks["staggered"]:
+		playAnim("staggered")
+		return true
+
+	if anim_locks["atk1"]:
+		playAnim("atk1")
+		return true
+
+	if anim_locks["atk2"]:
+		playAnim("atk2")
+		return true
+
+	if anim_locks["atk3"]:
+		playAnim("atk3")
+		return true
+
+	if anim_locks["prepare"]:
+		playAnim("prepare")
+		return true
+
+	if anim_locks["atk4"]:
+		playAnim("atk4" if animation.has_animation("atk4") else "atk1")
+		return true
+
+	if anim_locks["atk5"]:
+		playAnim("atk5" if animation.has_animation("atk5") else "atk1")
+		return true
+	if anim_locks["atk6"]:
+		playAnim("atk6" if animation.has_animation("atk6") else "atk1")
+		return true
+
+	return false
+
+func playRun()->bool:
+	if !is_running:
+		return false
+
+	if target != null:
+		if run_turn_anim != "":
+			playAnim(run_turn_anim)
+		else:
+			playAnim("run_cycle")
+
+		return true
+
+	if animation.has_animation("trot_cycle"):
+		playAnim("trot_cycle")
+	else:
+		playAnim("run_cycle")
+
+	return true
+
+func playWalk()->bool:
+	if !is_walking:
+		return false
+
+	playAnim("walk_cycle")
+
+	return true
+
+func playSit()->bool:
+	if !is_sitting:
+		return false
+
+	if anim_locks["sit"]:
+		if animation.has_animation("sit"):
+			playAnim("sit")
+		else:
+			playAnim("idle_sit")
+
+		return true
+
+	if anim_locks["stop_sit"]:
+		if animation.has_animation("stop_sit"):
+			playAnim("stop_sit",0.5)
+		else:
+			playAnim("idle_cycle")
+
+		return true
+
+	playAnim("idle_sit")
+
+	return true
+
 func animations()->void:
+	if playDeath():
+		return
+	if playTurn():
+		return
+	if playLocks():
+		return
+	if playRun():
+		return
+	if playWalk():
+		return
+	if playSit():
+		return
+	playAnim("idle_cycle",0.4)
 	if stats.health <= 0:
 		if anim_locks["die"]:
 			animation.play("die",blend)
 		else:
 			animation.play("dead")
 		return
+	if turn_anim != "" and !is_walking and !is_running:
+		for key in anim_locks:
+			anim_locks[key] = false
+		can_move = true
+		animation.play(turn_anim,blend)
+		return
+	if anim_locks["staggered"]:
+		animation.play("staggered",blend)
+	elif anim_locks["atk1"]:
+		animation.play("atk1",blend)
+	elif anim_locks["atk2"]:
+		animation.play("atk2",blend)
+	elif anim_locks["atk3"]:
+		animation.play("atk3",blend)
+	elif anim_locks["prepare"]:
+		animation.play("prepare",blend)
+	elif anim_locks["atk4"]:
+		animation.play("atk4",blend)
+	elif anim_locks["atk5"]:
+		animation.play("atk5",blend)
+	elif anim_locks["atk6"]:
+		animation.play("atk6",blend)
+	elif is_running:
+		if target != null and run_turn_anim != "":
+			animation.play(run_turn_anim,blend)
+		elif target != null:
+			animation.play("run_cycle")
+		elif animation.has_animation("trot_cycle"):
+			animation.play("trot_cycle")
+		else:
+			animation.play("run_cycle")
+	elif is_walking:
+		animation.play("walk_cycle")
+	elif is_sitting:
+		if anim_locks["sit"]:
+			if animation.has_animation("sit"):
+				animation.play("sit",blend)
+			else:
+				animation.play("idle_sit",blend)
+		elif anim_locks["stop_sit"]:
+			if animation.has_animation("stop_sit"):
+				animation.play("stop_sit",0.5)
+			else:
+				animation.play("idle_cycle",blend)
+		else:
+			animation.play("idle_sit",blend)
+	else:
+		animation.play("idle_cycle",0.4)
+
+	if stats.health <= 0:
+		if anim_locks["die"]:
+			animation.play("die",blend)
+		else:
+			animation.play("dead")
+		return
+
+	if turn_anim != "" and !is_walking and !is_running:
+		for key in anim_locks:
+			anim_locks[key] = false
+
+		can_move = true
+		animation.play(turn_anim,blend)
+		return
+
 	if anim_locks["staggered"]:
 		animation.play("staggered",blend)
 	elif anim_locks["atk1"]:
@@ -376,6 +566,11 @@ func animations()->void:
 	elif anim_locks["atk5"]:
 		if animation.has_animation("atk5"):
 			animation.play("atk5",blend)
+		else:
+			animation.play("atk1",blend)
+	elif anim_locks["atk6"]:
+		if animation.has_animation("atk6"):
+			animation.play("atk6",blend)
 		else:
 			animation.play("atk1",blend)
 	elif is_running:
@@ -402,46 +597,10 @@ func animations()->void:
 			animation.play("idle_sit",blend)
 	else:
 		animation.play("idle_cycle",0.4)
-#________________________Functions to call in animation_________________________
 
-
-var dash_power = 0.0
-var dash_direction = Vector3.ZERO
-onready var tween = $Tween
-func dashForward(dash_distance:float):
-	var power = dash_distance
-	power = dash_distance
-	dash_direction = global_transform.basis.z.normalized()
-	tween.stop_all()
-	tween.interpolate_method(self,"updateDash",power,0.0,0.15,Tween.TRANS_QUAD,Tween.EASE_OUT)
-	tween.start()
-
-onready var dmg_area = $AreaDamage
-func makeWay()->void:
-	for body in dmg_area.get_overlapping_bodies():
-		if body != self and body.is_in_group("Entities") and !body.is_in_group("Player"):
-			var direction = (body.global_transform.origin - global_transform.origin).normalized()
-			body.move_and_slide(direction * 0.3)
-		
-func callLockMov():
-	can_move = false
-func callCanMove():
-	can_move = true 
 func lockAnim(anim_name):
 	for key in anim_locks:
 		anim_locks[key] = false
-	anim_locks[anim_name] = true
-func callAnimUnlock(anim_name):
-	anim_locks[anim_name] = false
-	can_move = true 
-func callAnimAllUnlock():
-	for key in anim_locks:
-		anim_locks[key] = false
-func callDie()->void:
-	is_dead = true
 
-func callAnimMeleeSeqUP():
-	melee_step += randi() % 3 + 1
-
-	if melee_step > 7:
-		melee_step = 0
+	if anim_locks.has(anim_name):
+		anim_locks[anim_name] = true
