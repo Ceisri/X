@@ -2,9 +2,6 @@ extends Node
 
 onready var parent = $".."
 
-
-var combat_state = "normal"
-
 var melee_step = 1
 var turn_speed = 0.8
 var run_turn_speed = 1.6
@@ -20,7 +17,7 @@ var using_delayed_target = false
 export var walk_distance:float = 5
 
 
-
+var current_cast_skill = ""
 var active_cooldowns = {}
 var haste = 1.0
 var skill_icons = []
@@ -77,6 +74,8 @@ func sequenceMeleeContinue():
 		var skill = skill_order[current_skill]
 
 		if Skills.canUseSkill(skill,active_cooldowns):
+			current_cast_skill = skill
+
 			Skills.useSkillName(skill,active_cooldowns,haste,self)
 
 			match Skills.getAnim(skill):
@@ -104,103 +103,10 @@ func sequenceMeleeContinue():
 		tries += 1
 
 	parent.lockAnim("prepare")
-
-	if anim.begins_with("atk"):
-		return
-
-	if anim == "turn_l" or anim == "turn_r" or anim == "staggered":
-		return
-
-	for lock in parent.anim_locks.values():
-		if lock:
-			return
-
-	if skill_order.empty():
-		parent.lockAnim("prepare")
-		return
-
-	if play_prepare:
-		parent.lockAnim("prepare")
-		play_prepare = false
-		return
-
-
-	while tries < skill_order.size():
-		if current_skill >= skill_order.size():
-			current_skill = 0
-
-		var skill = skill_order[current_skill]
-
-		if Skills.canUseSkill(skill,active_cooldowns):
-			Skills.useSkillName(skill,active_cooldowns,haste,self)
-
-			match Skills.getAnim(skill):
-				"atk1":
-					parent.lockAnim("atk1")
-
-				"atk2":
-					parent.lockAnim("atk2")
-
-				"atk3":
-					parent.lockAnim("atk3")
-
-				"atk4":
-					parent.lockAnim("atk4")
-
-				_:
-					parent.lockAnim("prepare")
-
-			play_prepare = true
-			current_skill += 1
-			return
-
-		current_skill += 1
-		tries += 1
-
-	parent.lockAnim("prepare")
-	if parent.animation.current_animation.begins_with("atk"):
-		return
-	for lock in parent.anim_locks.values():
-		if lock:
-			return
-
-	if skill_order.empty():
-		parent.lockAnim("prepare")
-		return
-
-
-	while tries < skill_order.size():
-		if current_skill >= skill_order.size():
-			current_skill = 0
-
-		var skill = skill_order[current_skill]
-
-		if Skills.canUseSkill(skill,active_cooldowns):
-			Skills.useSkillName(skill,active_cooldowns,haste,self)
-
-			match Skills.getAnim(skill):
-				"atk1":
-					parent.lockAnim("atk1")
-
-				"atk2":
-					parent.lockAnim("atk2")
-
-				"atk3":
-					parent.lockAnim("atk3")
-
-				"atk4":
-					parent.lockAnim("atk4")
-
-				_:
-					parent.lockAnim("prepare")
-
-			current_skill += 1
-			return
-
-		current_skill += 1
-		tries += 1
-
-	parent.lockAnim("prepare")
+	
+	
+	
+	
 func sortSkills(a,b):
 	return Skills.getCooldown(a) > Skills.getCooldown(b)
 

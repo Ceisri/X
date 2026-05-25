@@ -44,6 +44,114 @@ var species_skills = {
 	]
 }
 
+var skill_damage = {
+	"bite.png":10,
+	"claw_srtrike3.png":14,
+	"claw_strike2.png":18,
+	"claw_strike.png":24,
+	"hide.png":0,
+	"trail_strike1.png":12,
+	"poison_claw.png":16,
+	"bear.png":20,
+	"bear_red.png":28,
+	"claw.png":22
+}
+
+
+var skill_stun = {
+	"bite.png":false,
+	"claw_srtrike3.png":false,
+	"claw_strike2.png":false,
+	"claw_strike.png":false,
+	"hide.png":false,
+	"trail_strike1.png":false,
+	"poison_claw.png":false,
+	"bear.png":false,
+	"bear_red.png":false,
+	"claw.png":false
+}
+
+var skill_lifesteal = {
+	"bite.png":true,
+	"claw_srtrike3.png":false,
+	"claw_strike2.png":false,
+	"claw_strike.png":false,
+	"hide.png":false,
+	"trail_strike1.png":false,
+	"poison_claw.png":false,
+	"bear.png":false,
+	"bear_red.png":false,
+	"claw.png":false
+}
+
+var skill_lifesteal_power = {
+	"bite.png":1,
+	"claw_srtrike3.png":0.0,
+	"claw_strike2.png":0.0,
+	"claw_strike.png":0.0,
+	"hide.png":0.0,
+	"trail_strike1.png":0.0,
+	"poison_claw.png":0.0,
+	"bear.png":0.0,
+	"bear_red.png":0.0,
+	"claw.png":0.0
+}
+
+
+var skill_cd_reduce = {
+
+	"claw_srtrike3.png":false,
+	"claw_strike2.png":false,
+	"claw_strike.png":false,
+	"hide.png":false,
+	"trail_strike1.png":false,
+	"poison_claw.png":false,
+	"bear.png":false,
+	"bear_red.png":false,
+	"claw.png":false
+}
+
+var skill_cd_reduce_power = {
+
+	"claw_srtrike3.png":0.0,
+	"claw_strike2.png":0.0,
+	"claw_strike.png":0.0,
+	"hide.png":0.0,
+	"trail_strike1.png":0.0,
+	"poison_claw.png":0.0,
+	"bear.png":0.0,
+	"bear_red.png":0.0,
+	"claw.png":0.0
+}
+
+func isCooldownReduce(skill):
+	return skill_cd_reduce.get(skill,false)
+
+func getCooldownReducePower(skill):
+	return skill_cd_reduce_power.get(skill,0.0)
+
+
+func isStun(skill):
+	return skill_stun.get(skill,false)
+
+func isLifesteal(skill):
+	return skill_lifesteal.get(skill,false)
+
+func getLifestealPower(skill):
+	return skill_lifesteal_power.get(skill,0.0)
+
+
+
+var support_skills = [
+	"hide.png"
+]
+
+func getDamage(skill):
+	return skill_damage.get(skill,0)
+
+func isAttack(skill):
+	return !support_skills.has(skill)
+
 func getSpeciesSkills(species):
 	return species_skills.get(species,[])
 

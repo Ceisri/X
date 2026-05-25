@@ -56,12 +56,30 @@ var anim_locks = {
 	"staggered":false,
 }
 
+func _ready()->void:
+	ignoreMobBodies()
+
 func _physics_process(delta):
 	animations()
 	if Engine.get_physics_frames() % 2 == 0:
 		CommonBehaviours.gravity(self)
 		switchState()
 
+
+func ignoreMobBodies():
+	for body in get_tree().get_nodes_in_group("Entity"):
+		if body == self:
+			continue
+
+		if body.is_in_group("Player") or body.is_in_group("Boss"):
+			continue
+
+		if is_in_group("Player") or is_in_group("Boss"):
+			continue
+
+		add_collision_exception_with(body)
+		body.add_collision_exception_with(self)
+			
 func switchState():
 	if stats.health > 0:
 		is_dead = false

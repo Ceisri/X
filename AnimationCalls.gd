@@ -22,6 +22,44 @@ func unlockAnim():
 		parent.anim_locks[key] = false
 	canMove()
 
+func excecutespell()->void:
+	var skill = parent.combat.current_cast_skill
+
+	if skill == "":
+		return
+
+	if !Skills.isAttack(skill):
+		return
+
+	var damage = Skills.getDamage(skill)
+
+	for body in parent.dmg_area.get_overlapping_bodies():
+		if body == parent:
+			continue
+
+		if body.has_method("getHit"):
+			body.getHit(parent,damage)
+
+			if Skills.isStun(skill):
+				# add stun logic here later
+				pass
+
+			if Skills.isLifesteal(skill):
+				var heal = damage * Skills.getLifestealPower(skill)
+
+				parent.stats.health += heal
+			
+			if Skills.isCooldownReduce(skill):
+				var reduction = Skills.getCooldownReducePower(skill)
+
+				for cd_skill in parent.combat.active_cooldowns.keys():
+					parent.combat.active_cooldowns[cd_skill] *= (1.0 - reduction)
+
+					if parent.combat.active_cooldowns[cd_skill] <= 0:
+						parent.combat.active_cooldowns.erase(cd_skill)
+
+
+
 func seqUP():#old deprecated, only useful for mobs who's skill system not yet implemented
 	pass
 #	parent.combat.melee_step += 1
