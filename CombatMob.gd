@@ -19,13 +19,190 @@ var using_delayed_target = false
 
 export var walk_distance:float = 5
 
-var melee_turn_unlock_counter = 0
-export var melee_turn_unlock_interval:int = 20
 
 
+var active_cooldowns = {}
+var haste = 1.0
+var skill_icons = []
+var skill_order = []
+var current_skill = -1
+
+func _ready():
+	skill_icons = Skills.getSpeciesSkills($"../Stats".species)
+
+	skill_order = skill_icons.duplicate()
+
+	skill_order.sort_custom(self,"sortSkills")
+func _physics_process(delta)->void:
+	for skill in active_cooldowns.keys():
+		active_cooldowns[skill] -= delta
+
+		if active_cooldowns[skill] <= 0:
+			active_cooldowns.erase(skill)
+var play_prepare = true
+var attack_phase = false
+
+func sequenceMeleeContinue():
+	var anim = parent.animation.current_animation
+
+	if anim.begins_with("atk"):
+		return
+
+	if anim == "staggered":
+		return
+
+	for lock in parent.anim_locks.values():
+		if lock:
+			return
+
+	if skill_order.empty():
+		parent.lockAnim("prepare")
+		return
+
+	if play_prepare:
+		play_prepare = false
+		attack_phase = true
+		parent.lockAnim("prepare")
+		return
+
+	if !attack_phase:
+		return
+
+	var tries = 0
+
+	while tries < skill_order.size():
+		if current_skill >= skill_order.size():
+			current_skill = 0
+
+		var skill = skill_order[current_skill]
+
+		if Skills.canUseSkill(skill,active_cooldowns):
+			Skills.useSkillName(skill,active_cooldowns,haste,self)
+
+			match Skills.getAnim(skill):
+				"atk1":
+					parent.lockAnim("atk1")
+
+				"atk2":
+					parent.lockAnim("atk2")
+
+				"atk3":
+					parent.lockAnim("atk3")
+
+				"atk4":
+					parent.lockAnim("atk4")
+
+				_:
+					parent.lockAnim("prepare")
+
+			play_prepare = true
+			attack_phase = false
+			current_skill += 1
+			return
+
+		current_skill += 1
+		tries += 1
+
+	parent.lockAnim("prepare")
+
+	if anim.begins_with("atk"):
+		return
+
+	if anim == "turn_l" or anim == "turn_r" or anim == "staggered":
+		return
+
+	for lock in parent.anim_locks.values():
+		if lock:
+			return
+
+	if skill_order.empty():
+		parent.lockAnim("prepare")
+		return
+
+	if play_prepare:
+		parent.lockAnim("prepare")
+		play_prepare = false
+		return
 
 
+	while tries < skill_order.size():
+		if current_skill >= skill_order.size():
+			current_skill = 0
 
+		var skill = skill_order[current_skill]
+
+		if Skills.canUseSkill(skill,active_cooldowns):
+			Skills.useSkillName(skill,active_cooldowns,haste,self)
+
+			match Skills.getAnim(skill):
+				"atk1":
+					parent.lockAnim("atk1")
+
+				"atk2":
+					parent.lockAnim("atk2")
+
+				"atk3":
+					parent.lockAnim("atk3")
+
+				"atk4":
+					parent.lockAnim("atk4")
+
+				_:
+					parent.lockAnim("prepare")
+
+			play_prepare = true
+			current_skill += 1
+			return
+
+		current_skill += 1
+		tries += 1
+
+	parent.lockAnim("prepare")
+	if parent.animation.current_animation.begins_with("atk"):
+		return
+	for lock in parent.anim_locks.values():
+		if lock:
+			return
+
+	if skill_order.empty():
+		parent.lockAnim("prepare")
+		return
+
+
+	while tries < skill_order.size():
+		if current_skill >= skill_order.size():
+			current_skill = 0
+
+		var skill = skill_order[current_skill]
+
+		if Skills.canUseSkill(skill,active_cooldowns):
+			Skills.useSkillName(skill,active_cooldowns,haste,self)
+
+			match Skills.getAnim(skill):
+				"atk1":
+					parent.lockAnim("atk1")
+
+				"atk2":
+					parent.lockAnim("atk2")
+
+				"atk3":
+					parent.lockAnim("atk3")
+
+				"atk4":
+					parent.lockAnim("atk4")
+
+				_:
+					parent.lockAnim("prepare")
+
+			current_skill += 1
+			return
+
+		current_skill += 1
+		tries += 1
+
+	parent.lockAnim("prepare")
+func sortSkills(a,b):
+	return Skills.getCooldown(a) > Skills.getCooldown(b)
 
 func updateTargetHistory(target):
 	target_history.append(target.global_transform.origin)
@@ -34,24 +211,28 @@ func updateTargetHistory(target):
 		delayed_target_pos = target_history.pop_front()
 		using_delayed_target = true
 
-
-func sequenceMeleeContinue():
-	if melee_step > 7:
-		melee_step = 1
-
-	if melee_step % 3 == 0:
-		parent.lockAnim("prepare")
-	elif melee_step % 2 == 0:
-		parent.lockAnim("atk1")
-	elif melee_step == 1:
-		parent.lockAnim("atk2")
-	elif melee_step == 5:
-		parent.lockAnim("atk3")
-	elif melee_step == 7:
-		parent.lockAnim("atk4")
-
+#
+#func sequenceMeleeContinue():
+#	if melee_step > 7:
+#		melee_step = 1
+#
+#	if melee_step % 3 == 0:
+#		parent.lockAnim("prepare")
+#	elif melee_step % 2 == 0:
+#		parent.lockAnim("atk1")
+#	elif melee_step == 1:
+#		parent.lockAnim("atk2")
+#	elif melee_step == 5:
+#		parent.lockAnim("atk3")
+#	elif melee_step == 7:
+#		parent.lockAnim("atk4")
+#
 
 func rotateToTarget(speed:float,target_pos:Vector3):
+	if parent.animation.current_animation == "prepare":
+		parent.turn_anim = ""
+		return
+
 	parent.turn_anim = ""
 
 	for lock in parent.anim_locks.values():
@@ -74,6 +255,7 @@ func rotateToTarget(speed:float,target_pos:Vector3):
 	var target_transform = parent.global_transform.looking_at(look_pos,Vector3.UP)
 
 	var current_turn_speed = turn_speed
+
 	if parent.is_running:
 		current_turn_speed = run_turn_speed
 
@@ -94,8 +276,6 @@ func rotateToTarget(speed:float,target_pos:Vector3):
 			parent.turn_anim = "turn_r"
 
 	parent.last_yaw = yaw
-
-
 func rotateToTargetMelee(speed:float,target_pos:Vector3):
 	for body in parent.dmg_area.get_overlapping_bodies():
 		if body == parent.target:
@@ -155,7 +335,6 @@ func combat():
 	if !target:
 		target_history.clear()
 		using_delayed_target = false
-		melee_turn_unlock_counter = 0
 		parent.is_walking = false
 		parent.is_running = false
 		return
@@ -172,14 +351,6 @@ func combat():
 
 	if in_melee:
 		using_delayed_target = false
-		melee_turn_unlock_counter += 1
-
-		if melee_turn_unlock_counter >= melee_turn_unlock_interval:
-			melee_turn_unlock_counter = 0
-
-			for key in parent.anim_locks:
-				if key != "die" and key != "staggered":
-					parent.anim_locks[key] = false
 
 		rotateToTargetMelee(0.1,real_target)
 
@@ -188,8 +359,6 @@ func combat():
 
 		sequenceMeleeContinue()
 		return
-
-	melee_turn_unlock_counter = 0
 
 	if real_distance > parent.melee_distance and using_delayed_target:
 		move_target = delayed_target_pos

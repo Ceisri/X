@@ -8,6 +8,9 @@ onready var stats = $"../Stats"
 
 func _ready():
 	pass
+#	cleanCallTracks()
+#	connectUnlockAnimLastFrames()
+	loadAnimations()
 func lockMov():
 	parent.can_move = false
 
@@ -19,11 +22,12 @@ func unlockAnim():
 		parent.anim_locks[key] = false
 	canMove()
 
-func seqUP():
-	parent.combat.melee_step += 1
-
-	if parent.combat.melee_step > 7:
-		parent.combat.melee_step = 1
+func seqUP():#old deprecated, only useful for mobs who's skill system not yet implemented
+	pass
+#	parent.combat.melee_step += 1
+#
+#	if parent.combat.melee_step > 7:
+#		parent.combat.melee_step = 1
 var dash_power = 0.0
 var dash_direction = Vector3.ZERO
 
@@ -140,3 +144,32 @@ func cleanCallTracks():
 			"%s%s.tres" % [save_path,anim_name],
 			anim
 		)
+
+func loadAnimations():
+	var species = stats.species
+	var save_path = "res://world/mobs/%s/animations/" % species
+
+	var dir = Directory.new()
+
+	if dir.open(save_path) != OK:
+		return
+
+	dir.list_dir_begin(true,true)
+
+	var file_name = dir.get_next()
+
+	while file_name != "":
+		if file_name.ends_with(".tres"):
+			var anim_name = file_name.get_basename()
+
+			var anim = load("%s%s" % [save_path,file_name])
+
+			if anim:
+				if animation.has_animation(anim_name):
+					animation.remove_animation(anim_name)
+
+				animation.add_animation(anim_name,anim)
+
+		file_name = dir.get_next()
+
+	dir.list_dir_end()
