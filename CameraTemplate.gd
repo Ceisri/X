@@ -25,6 +25,8 @@ func _ready():
 	$h/v/Camera.add_exception(get_parent())
 	
 func _input(event):
+	
+	
 	if event is InputEventMouseMotion:
 		camrot_h += -event.relative.x * h_sensitivity
 		camrot_v += event.relative.y * v_sensitivity

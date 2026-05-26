@@ -1,7 +1,16 @@
 extends Node
 
+
+
+
+"res://world/interface/assets/icons/player_skills/Warriorskill_02_attack.png"
+"res://world/interface/assets/icons/player_skills/Warriorskill_03_hit.png"
+"res://world/interface/assets/icons/player_skills/Warriorskill_04.png"
+
+
+
 var cooldowns = {
-	"bite.png":1,
+	"bite.png":0,
 	"claw_srtrike3.png":3,
 	"claw_strike2.png":6,
 	"claw_strike.png":9,
@@ -41,6 +50,7 @@ var species_skills = {
 		"bear.png",
 		"bear_red.png",
 		"claw.png"
+	
 	]
 }
 
@@ -123,6 +133,8 @@ var skill_cd_reduce_power = {
 	"bear_red.png":0.0,
 	"claw.png":0.0
 }
+
+
 
 func isCooldownReduce(skill):
 	return skill_cd_reduce.get(skill,false)

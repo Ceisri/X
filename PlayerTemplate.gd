@@ -1,37 +1,21 @@
 extends KinematicBody
-
-
-var save_id = "player"
+export (NodePath) var PlayerAnimationTree 
+onready var player_mesh = $character
+onready var animation = $character/AnimationPlayer
+onready var character = $character
 onready var stats =$Stats
 onready var camroot = $Camroot
+onready var skillbar = $UI/Skillbar
+var save_id = "player"
+var entity_name = "Victor"
 
-
-
-# Allows to pick your animation tree from the inspector
-export (NodePath) var PlayerAnimationTree 
-export onready var animation_tree = get_node(PlayerAnimationTree)
-
-onready var player_mesh = $character
-onready var character = $character
-
-# Gamplay mechanics and Inspector tweakables
 export var gravity = 9.8
 export var jump_force = 9
 export var walk_speed = 6
 export var run_speed = 18
-export var dash_power = 30 # Controls roll and big attack speed boosts
+export var dash_power = 30 
 
-# Animation node names
-var roll_node_name = "Roll"
-var idle_node_name = "Idle"
-var walk_node_name = "Walk"
-var run_node_name = "Run"
-var jump_node_name = "Jump"
-var attack1_node_name = "Attack1"
-var attack2_node_name = "Attack2"
-var bigattack_node_name = "BigAttack"
 
-# Condition States
 var is_attacking = bool()
 var is_rolling = bool()
 var is_walking = bool()
@@ -47,10 +31,44 @@ var vertical_velocity = Vector3()
 var movement_speed = int()
 var angular_acceleration = int()
 var acceleration = int()
+var can_move= true
+
+
+
+var anim_locks = {
+	"cleave":false,
+	"battlecry":false,
+	"dodge":false,
+	
+	
+	"stop_run":false,
+	"parry":false,
+	"sit":false,
+	"stop_sit":false,
+	"scream":false,
+	"die":false,
+	"prepare":false,
+	"staggered":false
+}
+
+
+
+func saveInventoryData():
+	# Call savedata() function on each child of inventory_grid that belongs to the group "Inventory"
+	for child in $UI/Skillbar/GridContainer.get_children():
+		if child.get_node("Slot").has_method("saveData"):
+				child.get_node("Slot").saveData()
+				
+
 
 func _ready(): # Camera based Rotation
+	for child in $UI/Skillbar/GridContainer.get_children():
+		child.get_node("Slot").player = self
+		child.parent = self 
+		child.get_node("Slot").loadData()
+	$Label3D.text = str(stats.health)
 	direction = Vector3.BACK.rotated(Vector3.UP, $Camroot/h.global_transform.basis.get_euler().y)
-
+	
 func _input(event): # All major mouse and button input events
 	if event is InputEventMouseMotion:
 		aim_turn = -event.relative.x * 0.015 # animates player with mouse movement while aiming 
@@ -60,28 +78,25 @@ func _input(event): # All major mouse and button input events
 	if event.is_action_pressed("attack"):
 		attack()
 
-func callAnimAllLock()->void:
-	for key in anim_locks:
-		anim_locks[key] = false
 		
-		
-var anim_locks = {
-	"stop_run":false,
-	"parry":false,
-	"scream":false
-}
+var cursor_visible = false
+func mouseMode()-> void:
+	if Input.is_action_just_pressed("ESC"):	# Toggle mouse mode
+		cursor_visible =!cursor_visible
+	if !cursor_visible:
+		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	else:
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 
 func _physics_process(delta):
+	if Engine.get_physics_frames() % 60 == 0:
+		saveInventoryData()
 	if Engine.get_physics_frames() % 3 == 0:
 		$UI.crossairInspect(self)
 		attack()
+	mouseMode()
+	animation.animationOrder(self,stats)
 	
-	
-	var animation_player
-	if is_instance_valid($character):
-		animation_player = $character/AnimationPlayer
-		animation_player.animationOrder(self,stats)
-
 	var on_floor = is_on_floor() # State control for is jumping/falling/landing
 	var h_rot = $Camroot/h.global_transform.basis.get_euler().y
 	
@@ -100,7 +115,6 @@ func _physics_process(delta):
 		vertical_velocity = Vector3.UP * jump_force
 		
 	if (Input.is_action_pressed("forward") || Input.is_action_pressed("backward") || Input.is_action_pressed("left") || Input.is_action_pressed("right")):
-
 		direction = Vector3(
 			Input.get_action_strength("left") - Input.get_action_strength("right"),
 			0,
@@ -161,6 +175,10 @@ func attack():
 			var body = ray.get_collider()
 			if body.is_in_group("Entity") and body != self:
 				body.getHit(self,7)
-				body.anim_locks["staggered"] = true
+				body.skillbar.anim_locks["staggered"] = true
 				body.stats.nutrition -= 10 
 		
+		
+func getHit(attacker: Node, damage: float) -> void:
+	stats.health -= damage
+	$Label3D.text = str(stats.health)

@@ -1,36 +1,21 @@
 extends Control
 
-var cooldowns = {
-	"bite.png":301.0,
-	"claw_srtrike3.png":241.0,
-	"claw_strike2.png":231.0,
-	"claw_strike.png":121.0,
-	"hide.png":128.0
-}
+
 
 var haste = 1.0
-onready var haste_label = $Label
-
 var active_cooldowns = {}
 
-onready var icons = [
-	$GridContainer/Icon1,
-	$GridContainer/Icon2,
-	$GridContainer/Icon3,
-	$GridContainer/Icon4,
-	$GridContainer/Icon5,
-	$GridContainer/Icon6,
-	$GridContainer/Icon7,
-	$GridContainer/Icon8,
-	$GridContainer/Icon9,
-	$GridContainer/Icon10
-]
+onready var haste_label = $Label
+onready var grid = $GridContainer
 
 func _ready():
 	loadData()
+	test(grid)
 
-	for icon in icons:
-		icon.get_node("Label").visible = false
+func test(grid):
+	for icon in grid.get_children():
+		if icon.has_node("Label"):
+			icon.get_node("Label").visible = false
 
 func _process(delta):
 	haste_label.text = "Haste %.1f" % haste
@@ -47,90 +32,43 @@ func _process(delta):
 	elif Input.is_action_just_pressed("haste_test4"):
 		haste = 0
 
+	if Input.is_action_just_pressed("1"):
+		Skills.useSkill(0,grid,active_cooldowns,haste,self)
+
+	elif Input.is_action_just_pressed("2"):
+		Skills.useSkill(1,grid,active_cooldowns,haste,self)
+
+	elif Input.is_action_just_pressed("3"):
+		Skills.useSkill(2,grid,active_cooldowns,haste,self)
+
+	elif Input.is_action_just_pressed("4"):
+		Skills.useSkill(3,grid,active_cooldowns,haste,self)
+
+	elif Input.is_action_just_pressed("5"):
+		Skills.useSkill(4,grid,active_cooldowns,haste,self)
+
+	elif Input.is_action_just_pressed("6"):
+		Skills.useSkill(5,grid,active_cooldowns,haste,self)
+
+	elif Input.is_action_just_pressed("7"):
+		Skills.useSkill(6,grid,active_cooldowns,haste,self)
+
+	elif Input.is_action_just_pressed("8"):
+		Skills.useSkill(7,grid,active_cooldowns,haste,self)
+
+	elif Input.is_action_just_pressed("9"):
+		Skills.useSkill(8,grid,active_cooldowns,haste,self)
+
+	elif Input.is_action_just_pressed("0"):
+		Skills.useSkill(9,grid,active_cooldowns,haste,self)
+
 	for skill in active_cooldowns.keys():
 		active_cooldowns[skill] -= delta
 
 		if active_cooldowns[skill] <= 0:
 			active_cooldowns.erase(skill)
 
-	updateLabels()
-
-func _input(event):
-	if event is InputEventKey and event.pressed:
-		if event.scancode == KEY_KP_ADD:
-			haste += 0.1
-
-		elif event.scancode == KEY_KP_SUBTRACT:
-			haste = max(haste - 0.1,0.0)
-
-		elif event.scancode == KEY_1:
-			useSkill(0)
-
-		elif event.scancode == KEY_2:
-			useSkill(1)
-
-		elif event.scancode == KEY_3:
-			useSkill(2)
-
-		elif event.scancode == KEY_4:
-			useSkill(3)
-
-		elif event.scancode == KEY_5:
-			useSkill(4)
-
-		elif event.scancode == KEY_6:
-			useSkill(5)
-
-		elif event.scancode == KEY_7:
-			useSkill(6)
-
-		elif event.scancode == KEY_8:
-			useSkill(7)
-
-		elif event.scancode == KEY_9:
-			useSkill(8)
-
-		elif event.scancode == KEY_0:
-			useSkill(9)
-
-func useSkill(index):
-	if index >= icons.size():
-		return
-
-	var icon = icons[index]
-
-	if !icon.texture:
-		return
-
-	var skill = icon.texture.resource_path.get_file()
-
-	if active_cooldowns.has(skill):
-		return
-
-	if cooldowns.has(skill):
-		var final_cd = cooldowns[skill]
-
-		if haste > 0:
-			final_cd /= haste
-
-		active_cooldowns[skill] = final_cd
-		saveData()
-
-func updateLabels():
-	for icon in icons:
-		var label = icon.get_node("Label")
-
-		if !icon.texture:
-			label.visible = false
-			continue
-
-		var skill = icon.texture.resource_path.get_file()
-
-		if active_cooldowns.has(skill):
-			label.visible = true
-			label.text = "%.1f" % max(active_cooldowns[skill],0.0)
-		else:
-			label.visible = false
+	Skills.updateLabels($GridContainer,active_cooldowns)
 
 func saveData():
 	var saveDirectory = "user://" + name + "/"
