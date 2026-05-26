@@ -1,0 +1,390 @@
+shader_type spatial;
+render_mode specular_schlick_ggx, async_visible;
+
+uniform sampler2D tex_grass;
+uniform sampler2D tex_rock;
+
+uniform sampler2D tex_patch_a;
+uniform sampler2D tex_patch_a_noise;
+
+uniform sampler2D tex_patch_b;
+uniform sampler2D tex_patch_b_noise;
+
+uniform sampler2D tex_rock_patch_a;
+uniform sampler2D tex_rock_patch_a_noise;
+
+uniform sampler2D tex_rock_patch_b;
+uniform sampler2D tex_rock_patch_b_noise;
+
+uniform sampler2D tex_variation_noise;
+uniform sampler2D tex_domain_warp_noise;
+
+uniform float uv_scale = 8.0;
+
+uniform float macro_scale = 0.08;
+uniform float variation_strength = 0.15;
+
+uniform float rock_macro_scale = 0.015;
+uniform float rock_variation_strength = 0.25;
+
+uniform float variation_noise_scale = 0.01;
+uniform float variation_noise_strength = 0.35;
+
+uniform float domain_warp_scale1 = 0.0015;
+uniform float domain_warp_strength1 = 30.0;
+
+uniform float domain_warp_scale2 = 0.004;
+uniform float domain_warp_strength2 = 10.0;
+
+uniform float slope_start = 0.70;
+uniform float slope_end = 0.95;
+
+uniform float patch_a_scale = 0.025;
+uniform float patch_a_density = 0.65;
+uniform float patch_a_noise_scale = 0.05;
+uniform float patch_a_noise_strength = 0.35;
+uniform float patch_a_overhang = 0.03;
+uniform float patch_a_blend = 0.06;
+
+uniform float patch_b_scale = 0.018;
+uniform float patch_b_density = 0.72;
+uniform float patch_b_noise_scale = 0.04;
+uniform float patch_b_noise_strength = 0.30;
+uniform float patch_b_overhang = 0.025;
+uniform float patch_b_blend = 0.05;
+
+uniform float rock_patch_a_scale = 0.022;
+uniform float rock_patch_a_density = 0.68;
+uniform float rock_patch_a_noise_scale = 0.05;
+uniform float rock_patch_a_noise_strength = 0.30;
+uniform float rock_patch_a_overhang = 0.025;
+uniform float rock_patch_a_blend = 0.05;
+
+uniform float rock_patch_b_scale = 0.016;
+uniform float rock_patch_b_density = 0.75;
+uniform float rock_patch_b_noise_scale = 0.04;
+uniform float rock_patch_b_noise_strength = 0.25;
+uniform float rock_patch_b_overhang = 0.02;
+uniform float rock_patch_b_blend = 0.04;
+
+varying vec3 world_pos;
+varying vec3 world_normal;
+
+void vertex(){
+	world_pos = (WORLD_MATRIX * vec4(VERTEX,1.0)).xyz;
+
+	world_normal = normalize(
+		mat3(WORLD_MATRIX) * NORMAL
+	);
+}
+
+float hash(vec2 p){
+	return fract(
+		sin(
+			dot(
+				p,
+				vec2(127.1,311.7)
+			)
+		) * 43758.5453
+	);
+}
+
+float noise(vec2 p){
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+
+	float a = hash(i);
+	float b = hash(i + vec2(1.0,0.0));
+	float c = hash(i + vec2(0.0,1.0));
+	float d = hash(i + vec2(1.0,1.0));
+
+	vec2 u = f * f * (3.0 - 2.0 * f);
+
+	return mix(
+		mix(a,b,u.x),
+		mix(c,d,u.x),
+		u.y
+	);
+}
+
+float fbm(vec2 p){
+	float v = 0.0;
+
+	v += noise(p) * 0.5;
+	p *= 2.0;
+
+	v += noise(p) * 0.25;
+	p *= 2.0;
+
+	v += noise(p) * 0.125;
+
+	return v;
+}
+
+vec2 hash2(vec2 p){
+	p = vec2(
+		dot(p,vec2(127.1,311.7)),
+		dot(p,vec2(269.5,183.3))
+	);
+
+	return fract(
+		sin(p) * 43758.5453
+	);
+}
+
+vec2 domain_warp(vec2 p){
+	vec2 q = p;
+
+	vec2 w1 = texture(
+		tex_domain_warp_noise,
+		q * domain_warp_scale1
+	).rg * 2.0 - 1.0;
+
+	q += w1 *
+		domain_warp_strength1;
+
+	vec2 w2 = texture(
+		tex_domain_warp_noise,
+		q * domain_warp_scale2
+	).rg * 2.0 - 1.0;
+
+	q += w2 *
+		domain_warp_strength2;
+
+	return q;
+}
+
+vec3 sample_variation(
+	sampler2D tex,
+	vec2 uv,
+	float local_macro,
+	float local_strength
+){
+	vec2 distort = texture(
+		tex_variation_noise,
+		world_pos.xz *
+		variation_noise_scale
+	).rg;
+
+	distort = (
+		distort -
+		vec2(0.5,0.5)
+	) * variation_noise_strength;
+
+	uv += distort;
+
+	vec2 cell = floor(
+		uv * local_macro
+	);
+
+	vec2 rnd = hash2(cell);
+
+	vec2 uv1 = uv;
+
+	vec2 uv2 = vec2(
+		-(uv + rnd * 2.0).y,
+		(uv + rnd * 2.0).x
+	);
+
+	vec2 uv3 = uv * 0.5 - rnd;
+
+	vec3 c1 = texture(tex,uv1).rgb;
+	vec3 c2 = texture(tex,uv2).rgb;
+	vec3 c3 = texture(tex,uv3).rgb;
+
+	return mix(
+		mix(
+			c1,
+			c2,
+			local_strength
+		),
+
+		c3,
+
+		local_strength * 0.5
+	);
+}
+
+float build_patch(
+	float scale,
+	float noise_scale,
+	float noise_strength,
+	sampler2D noise_tex
+){
+	vec2 warped = domain_warp(
+		world_pos.xz
+	);
+
+	float m = fbm(
+		warped * scale
+	);
+
+	float n = texture(
+		noise_tex,
+		warped *
+		noise_scale
+	).r;
+
+	m += (
+		n - 0.5
+	) * noise_strength;
+
+	return m;
+}
+
+void apply_patch(
+	inout vec3 col,
+	vec2 world_uv,
+	float scale,
+	float density,
+	float noise_scale,
+	float noise_strength,
+	sampler2D noise_tex,
+	float overhang,
+	float blend,
+	sampler2D patch_tex,
+	float macro_var,
+	float strength_var
+){
+	float mask = build_patch(
+		scale,
+		noise_scale,
+		noise_strength,
+		noise_tex
+	);
+
+	float core = step(
+		density,
+		mask
+	);
+
+	float edge = smoothstep(
+		density -
+		overhang -
+		blend,
+
+		density -
+		overhang,
+
+		mask
+	);
+
+	float apply = max(
+		core,
+		edge
+	);
+
+	if(apply > 0.0){
+		col = mix(
+			col,
+
+			sample_variation(
+				patch_tex,
+				world_uv,
+				macro_var,
+				strength_var
+			),
+
+			apply
+		);
+	}
+}
+
+void fragment(){
+	vec2 world_uv =
+		world_pos.xz /
+		uv_scale;
+
+	vec3 grass = sample_variation(
+		tex_grass,
+		world_uv,
+		macro_scale,
+		variation_strength
+	);
+
+	vec3 rock = sample_variation(
+		tex_rock,
+		world_uv,
+		rock_macro_scale,
+		rock_variation_strength
+	);
+
+	float terrain_blend = smoothstep(
+		slope_start,
+		slope_end,
+		world_normal.y
+	);
+
+	vec3 col = mix(
+		rock,
+		grass,
+		terrain_blend
+	);
+
+	if(terrain_blend > 0.5){
+		apply_patch(
+			col,
+			world_uv,
+			patch_a_scale,
+			patch_a_density,
+			patch_a_noise_scale,
+			patch_a_noise_strength,
+			tex_patch_a_noise,
+			patch_a_overhang,
+			patch_a_blend,
+			tex_patch_a,
+			macro_scale,
+			variation_strength
+		);
+
+		apply_patch(
+			col,
+			world_uv,
+			patch_b_scale,
+			patch_b_density,
+			patch_b_noise_scale,
+			patch_b_noise_strength,
+			tex_patch_b_noise,
+			patch_b_overhang,
+			patch_b_blend,
+			tex_patch_b,
+			macro_scale,
+			variation_strength
+		);
+	}
+
+	if(terrain_blend <= 0.5){
+		apply_patch(
+			col,
+			world_uv,
+			rock_patch_a_scale,
+			rock_patch_a_density,
+			rock_patch_a_noise_scale,
+			rock_patch_a_noise_strength,
+			tex_rock_patch_a_noise,
+			rock_patch_a_overhang,
+			rock_patch_a_blend,
+			tex_rock_patch_a,
+			rock_macro_scale,
+			rock_variation_strength
+		);
+
+		apply_patch(
+			col,
+			world_uv,
+			rock_patch_b_scale,
+			rock_patch_b_density,
+			rock_patch_b_noise_scale,
+			rock_patch_b_noise_strength,
+			tex_rock_patch_b_noise,
+			rock_patch_b_overhang,
+			rock_patch_b_blend,
+			tex_rock_patch_b,
+			rock_macro_scale,
+			rock_variation_strength
+		);
+	}
+
+	ALBEDO = col;
+	EMISSION = col;
+}
