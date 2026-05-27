@@ -9,6 +9,8 @@ func _ready():
 	loadData()
 
 
+
+
 func saveData():
 	var parentName = get_parent().get_name()
 	var folderPath = "user://Characters/" + player.entity_name + "/"
@@ -38,7 +40,13 @@ func saveData():
 
 func loadData():
 	var parentName = get_parent().get_name()
-	var savePath = "user://Characters/" + player.entity_name + "/" + parentName + "_saved_texture_data.txt"
+	var savePath = (
+		"user://Characters/"
+		+ player.entity_name
+		+ "/"
+		+ parentName
+		+ "_saved_texture_data.txt"
+	)
 
 	var file = File.new()
 
@@ -53,10 +61,16 @@ func loadData():
 
 	file.close()
 
-	print(savePath)
+	if path == "":
+		texture = null
+		get_parent().quantity = 0
+		return
 
-	if path != "":
-		var loadedTexture = load(path)
-		if loadedTexture != null:
-			texture = loadedTexture
-			get_parent().quantity = int(quantity_str)
+	var loadedTexture = load(path)
+
+	if loadedTexture != null:
+		texture = loadedTexture
+		get_parent().quantity = int(quantity_str)
+	else:
+		texture = null
+		get_parent().quantity = 0

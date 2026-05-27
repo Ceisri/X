@@ -8,6 +8,15 @@ var skill_tree = false
 var SAVE_DIR = "user://slots/"
 
 
+func _physics_process(delta):
+	if Engine.get_physics_frames() % 66 == 0:
+		if icon.texture == null:
+			quantity = 0
+			item = "null"
+
+			if icon.has_node("CD"):
+				icon.get_node("CD").text = ""
+		
 
 
 func get_drag_data(position: Vector2):
@@ -33,29 +42,47 @@ func can_drop_data(position, data):
 	data["target_item"] = item
 
 	return true
-
-func drop_data(position, data):
+func drop_data(position,data):
 	var origin_texture = data["origin_texture"]
 	var target_texture = icon.texture
-	var target_item = item
+
 	var origin_quantity = data["origin_quantity"]
-	var target_quantity = quantity
+
 	var origin_node = data["origin_node"]
 	var origin_icon = origin_node.get_node("Slot")
-#	var dragPreview = origin_node.get_node("Sprite") #find the floating image of the sprite
-#	dragPreview.queue_free()# delete that floating image 
 
 	icon.texture = origin_texture
+
 	if origin_texture == target_texture:
-		# Combine quantities if items are the same
-		quantity += data["origin_quantity"]
-		origin_node.quantity = 0  # Reset the origin quantity
+		quantity += origin_quantity
+
+		origin_node.quantity = 0
+		origin_node.item = "null"
+
+		origin_icon.texture = null
+
+		if origin_icon.has_node("CD"):
+			origin_icon.get_node("CD").text = ""
+
 	else:
-		# Swap quantities if items are different
 		if origin_node.skill_tree == false:
-				var temp_quantity = quantity
-				quantity = origin_quantity
-				origin_node.quantity = temp_quantity # swap quantities
-				origin_icon.texture = target_texture # swap textures
+			var temp_quantity = quantity
 
+			quantity = origin_quantity
+			origin_node.quantity = temp_quantity
 
+			origin_icon.texture = target_texture
+
+			if origin_icon.texture == null:
+				origin_node.quantity = 0
+				origin_node.item = "null"
+
+				if origin_icon.has_node("CD"):
+					origin_icon.get_node("CD").text = ""
+
+			if icon.texture == null:
+				quantity = 0
+				item = "null"
+
+				if icon.has_node("CD"):
+					icon.get_node("CD").text = ""

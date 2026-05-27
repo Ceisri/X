@@ -1,22 +1,29 @@
 extends AnimationPlayer
 onready var player = $"../.."
+onready var animation_calls = $"../../AnimationCalls"
 var blend = 0.25
 
 func animationOrder(controller,stats)->void:
-	if controller.anim_locks["dodge"] == true:
-		play("dodge",blend)
-	elif controller.anim_locks["cleave"] == true:
-		play("cleave",blend)
-	elif controller.anim_locks["battlecry"] == true:
-		play("battlecry",blend)
-	elif controller.anim_locks["stop_run"] == true:
-		if player.is_running == false:
-			play("stop_run",blend,stats.agility)
-		else:
+	for anim_name in controller.anim_locks.keys():
+		if controller.anim_locks[anim_name]:
+			if current_animation != anim_name:
+				if has_animation(anim_name):
+					play(anim_name,blend)
+				else:
+					print("Missing animation: ",anim_name)
+					play("land",blend)
+
+			return
+
+	if !player.is_on_floor():
+		play("fall",blend)
+	elif player.moving:
+		if player.movement_mode == "run":
 			play("run_cycle",0,stats.agility)
-	elif player.is_running == true:
-		play("run_cycle",0,stats.agility)
-	elif player.is_walking == true:
-		play("walk_cycle")
+		elif player.movement_mode == "walk":
+			play("walk_cycle")
 	else:
 		play("idle_cycle",blend)
+		
+		
+		

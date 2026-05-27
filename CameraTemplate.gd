@@ -1,7 +1,7 @@
 extends Spatial
 
-# Allows to select the player mesh from the inspector
-export (NodePath) var PlayerCharacterMesh
+onready var player = $".."
+onready var PlayerCharacterMesh = $"../character"
 
 var camrot_h = 0
 var camrot_v = 0
@@ -25,19 +25,18 @@ func _ready():
 	$h/v/Camera.add_exception(get_parent())
 	
 func _input(event):
-	
-	
-	if event is InputEventMouseMotion:
-		camrot_h += -event.relative.x * h_sensitivity
-		camrot_v += event.relative.y * v_sensitivity
-		
-	if event is InputEventMouseButton and event.button_index == BUTTON_WHEEL_UP:
-			# Zoom in when scrolling up
-		Zoom(-1)
-	elif event is InputEventMouseButton and event.button_index == BUTTON_WHEEL_DOWN:
-			# Zoom out when scrolling down
-		Zoom(1)
-		
+	if player.cursor_visible == false:
+		if event is InputEventMouseMotion:
+			camrot_h += -event.relative.x * h_sensitivity
+			camrot_v += event.relative.y * v_sensitivity
+			
+		if event is InputEventMouseButton and event.button_index == BUTTON_WHEEL_UP:
+				# Zoom in when scrolling up
+			Zoom(-1)
+		elif event is InputEventMouseButton and event.button_index == BUTTON_WHEEL_DOWN:
+				# Zoom out when scrolling down
+			Zoom(1)
+			
 func _joystick_input():
 	if (Input.is_action_pressed("lookup") ||  Input.is_action_pressed("lookdown") ||  Input.is_action_pressed("lookleft") ||  Input.is_action_pressed("lookright")):
 		joyview.x = Input.get_action_strength("lookleft") - Input.get_action_strength("lookright")
@@ -47,10 +46,9 @@ func _joystick_input():
 		#$h.rotation_degrees.y = lerp($h.rotation_degrees.y, camrot_h, delta * h_acceleration)
 
 func Zoom(zoom_direction):
-	# Adjust the camera's position based on the zoom direction
 	camera.translation.y += zoom_direction * zoom_speed
 	camera.translation.z -= zoom_direction * (zoom_speed * 2)
-	#print("z" + str(camera.translation.z) + " y" +str(camera.translation.y) )
+
 
 
 
@@ -61,7 +59,7 @@ func _physics_process(delta):
 		
 	camrot_v = clamp(camrot_v, cam_v_min, cam_v_max)
 	
-	var mesh_front = get_node(PlayerCharacterMesh).global_transform.basis.z
+	var mesh_front = $"../character".global_transform.basis.z
 
 	cam_h.rotation_degrees.y = lerp(cam_h.rotation_degrees.y, camrot_h, delta * h_acceleration)
 	
