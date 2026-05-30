@@ -46,14 +46,14 @@ func updateEnemySkills(body):
 
 	skill_template.visible = false
 
-	var skills = Skills.getSpeciesSkills(body.stats.species)
+	var skills = MobSkills.getSpeciesSkills(body.stats.species)
 
 	for i in range(skills.size()):
 		var skill = skills[i]
 
 		var icon = skill_template.duplicate()
 		icon.visible = true
-		icon.texture = load(Skills.getSkillPath(skill))
+		icon.texture = load(MobSkills.getSkillPath(skill))
 
 		var label = icon.get_node("Label")
 

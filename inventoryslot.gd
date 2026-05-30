@@ -1,113 +1,167 @@
 extends TextureButton
-#inventory slot script
+# inventory slot script
 
-onready var icon = $Slot
-onready var quantity_label = $Quantity
-onready var inventory = $"../../.."
+onready var icon = get_node_or_null("Slot")
+onready var quantity_label = get_node_or_null("Quantity")
+onready var inventory = get_node_or_null("../../..")
 
 var quantity = 0
-var item = "null"
 var type = "item"
-var stackable = true
+var stackable = false
 var max_quantity = 9999999999
 
 func _ready():
+	if not icon:
+		print("InventorySlot: missing Slot node")
+	if not quantity_label:
+		print("InventorySlot: missing Quantity label")
+	
+	updateStackableFromTexture()
 	displayQuantity()
 
+
+func updateStackableFromTexture():
+	# no item → default
+	if not icon or not icon.texture:
+		stackable = false
+		return
+
+	# safety check for Items
+	if not Engine.has_singleton("Items") and not get_node_or_null("/root/Items"):
+		return
+
+	# ARMOR = NOT stackable
+	# everything else = stackable
+	if icon.texture in Items.armors.values():
+		stackable = false
+	else:
+		stackable = true
 func _physics_process(delta):
-	if Engine.get_physics_frames() % 12 == 0:
-		displayQuantity()
+	if Engine.get_physics_frames() % 132 == 0:
+		if visible:
+			displayQuantity()
 
 func displayQuantity():
+	if not icon:
+		print("displayQuantity: icon missing")
+		return
+
 	if icon.texture == null:
 		quantity = 0
-		quantity_label.text = ""
+		if quantity_label:
+			quantity_label.text = ""
 		return
 
 	if quantity > 0:
-		quantity_label.text = str(round(quantity))
+		if quantity_label:
+			quantity_label.text = str(round(quantity))
 	else:
-		quantity_label.text = ""
+		if quantity_label:
+			quantity_label.text = ""
 		icon.texture = null
 
-func get_drag_data(position:Vector2):
-	var parent_slot = get_parent().get_name()
+func get_drag_data(position: Vector2):
+	if not icon:
+		print("get_drag_data: missing icon")
+		return null
+
+	var parent_slot = get_parent().get_name() if get_parent() else "UNKNOWN"
 
 	var data = {
 		"origin_node": self,
 		"origin_slot": parent_slot,
 		"origin_texture": icon.texture,
 		"origin_quantity": quantity,
-		"origin_item": item,
+		"origin_stackable": stackable,
+		"origin_max_quantity": max_quantity,
 		"type": type
 	}
 
 	displayQuantity()
 	return data
 
-func can_drop_data(position,data):
-	displayQuantity()
+func can_drop_data(position, data):
+	if typeof(data) != TYPE_DICTIONARY:
+		print("can_drop_data: invalid data type")
+		return false
 
-	data["target_texture"] = icon.texture
+	if not data.has("type"):
+		print("can_drop_data: missing type key")
+		return false
+
+	if icon:
+		data["target_texture"] = icon.texture
 	data["target_quantity"] = quantity
-	data["target_item"] = item
 
-	return data["type"] != "skill"
+	return data.get("type", "") != "skill"
 
-func drop_data(position,data):
-	displayQuantity()
-
-	var origin_node = data["origin_node"]
-
-	if origin_node == self:
+func drop_data(position, data):
+	if typeof(data) != TYPE_DICTIONARY:
+		print("drop_data: invalid data")
 		return
 
-	var origin_icon = origin_node.get_node("Slot")
+	if not data.has("origin_node"):
+		print("drop_data: missing origin_node")
+		return
+
+	var origin_node = data["origin_node"]
+	if not is_instance_valid(origin_node):
+		print("drop_data: origin_node is invalid")
+		return
+
+	var origin_icon = origin_node.get_node_or_null("Slot")
+	if not origin_icon:
+		print("drop_data: origin_slot missing Slot node")
+		return
 
 	var dragPreview = origin_node.get_node_or_null("Sprite")
-
 	if dragPreview:
 		dragPreview.queue_free()
 
-	var origin_texture = data["origin_texture"]
-	var origin_item = data["origin_item"]
-	var origin_quantity = data["origin_quantity"]
-
-	var target_texture = icon.texture
-	var target_item = item
-	var target_quantity = quantity
+	var origin_texture = data.get("origin_texture", null)
+	var origin_quantity = data.get("origin_quantity", 0)
+	var origin_stackable = data.get("origin_stackable", false)
+	var origin_max_quantity = data.get("origin_max_quantity", 0)
 
 	if origin_texture == null:
+		print("drop_data: origin_texture is null")
 		return
 
+	var target_texture = icon.texture if icon else null
+
 	if (
-		origin_item == target_item
-		and origin_texture == target_texture
+		origin_texture == target_texture
 		and stackable
+		and origin_stackable
 	):
 		var total = quantity + origin_quantity
 
 		if total <= max_quantity:
 			quantity = total
-
 			origin_node.quantity = 0
 			origin_icon.texture = null
-
 		else:
 			quantity = max_quantity
 			origin_node.quantity = total - max_quantity
-
 	else:
-		origin_icon.texture = target_texture
-		icon.texture = origin_texture
+		if origin_icon:
+			origin_icon.texture = target_texture
+		if icon:
+			icon.texture = origin_texture
 
-		origin_node.item = target_item
-		item = origin_item
-
-		origin_node.quantity = target_quantity
+		origin_node.quantity = data.get("target_quantity", quantity)
 		quantity = origin_quantity
 
-	displayQuantity()
-	origin_node.displayQuantity()
+		origin_node.stackable = data.get("target_stackable", stackable)
+		stackable = origin_stackable
 
-	inventory.saveData()
+		origin_node.max_quantity = data.get("target_max_quantity", max_quantity)
+		max_quantity = origin_max_quantity
+
+	displayQuantity()
+
+	if origin_node and origin_node.has_method("displayQuantity"):
+		origin_node.displayQuantity()
+
+	if inventory and inventory.has_method("saveData"):
+		inventory.saveData()

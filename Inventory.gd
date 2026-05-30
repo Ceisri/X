@@ -26,7 +26,8 @@ func _ready()->void:
 
 	setupInventorySlots()
 	loadData()
-
+	for child in inventory_grid.get_children():
+		child.displayQuantity()
 func setupInventorySlots():
 	var original_slot = inventory_grid.get_child(0)
 
@@ -55,15 +56,22 @@ func setupInventorySlots():
 func _on_inventory_slot_pressed(index):
 	var current_time = OS.get_ticks_msec() / 1000.0
 
+	var alt_pressed = Input.is_action_pressed("ui_alt") or Input.is_key_pressed(KEY_ALT)
+
 	if last_pressed_index == index and current_time - last_press_time <= double_press_time:
 		last_pressed_index = -1
 		last_press_time = 0.0
+
+		if alt_pressed:
+			clearSlot(index)
+			return
 
 		useItem(index)
 		return
 
 	last_pressed_index = index
 	last_press_time = current_time
+
 
 func useItem(index):
 	var button = inventory_grid.get_node("InventorySlot" + str(index))
@@ -94,9 +102,17 @@ func useItem(index):
 			inventory_grid,
 			Items.flasks["empty"]
 		)
-
+	button.displayQuantity()
 	saveData()
+func clearSlot(index):
+	var button = inventory_grid.get_node("InventorySlot" + str(index))
+	var slot = button.get_node("Slot")
 
+	button.quantity = 0
+	slot.texture = null
+
+	button.displayQuantity()
+	saveData()
 func saveData():
 	var dir = Directory.new()
 	var character_dir = SAVE_DIR + player.entity_name
@@ -117,9 +133,11 @@ func saveData():
 			var slot = child.get_node("Slot")
 
 			data["slots"][child.name] = {
-				"texture": slot.texture.resource_path if slot.texture != null else "",
-				"quantity": child.quantity
-			}
+			"texture": slot.texture.resource_path if slot.texture != null else "",
+			"quantity": child.quantity,
+			"stackable": child.stackable,
+			"max_quantity": child.max_quantity
+}
 
 		file.store_var(data)
 		file.close()
@@ -147,7 +165,11 @@ func loadData():
 					var slot = child.get_node("Slot")
 					var slot_data = data["slots"][child.name]
 
-					child.quantity = slot_data["quantity"]
+					child.quantity = slot_data.get("quantity", 0)
+					child.stackable = slot_data.get("stackable", false)
+					child.max_quantity = slot_data.get("max_quantity", 9999999999)
+
+
 
 					if slot_data["texture"] != "":
 						slot.texture = load(slot_data["texture"])
@@ -161,11 +183,16 @@ func collapse()->void:
 	saveData()
 
 func getRandItems()->void:
+	for child in inventory_grid.get_children():
+		child.displayQuantity()
 	CommonBehaviours.addStackableItem(
 		inventory_grid,
 		Items.flasks["energy"]
 	)
-
+	CommonBehaviours.addNotStackableItem(
+		inventory_grid,
+		Items.armors["armor1"]
+	)
 	CommonBehaviours.addStackableItem(
 		inventory_grid,
 		Items.flasks["energy"]

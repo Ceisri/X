@@ -2,6 +2,7 @@ extends KinematicBody
 onready var player_mesh = $character
 onready var animation = $character/AnimationPlayer
 onready var character = $character
+onready var equipment =$UI/Equipment
 onready var stats =$Stats
 onready var camroot = $Camroot
 onready var camera_v = $Camroot/h/v
@@ -47,20 +48,23 @@ var anim_locks = {
 
 
 func _physics_process(delta):
+	animationOrder()
 	jump()
 	movement(delta)
 	dig()
 	attack()
 	dash()
+	if Input.is_action_just_pressed("character"):
+		equipment.visible = !equipment.visible
 	if Engine.get_physics_frames() % 4000 == 0:
 		saveInventoryData()
 	if Engine.get_physics_frames() % 3 == 0:
+		equipment.updateEquipment()
 		$UI.crossairInspect(self)
-		$Label3D.text = str(stats.health)
-		
+		$Label3D.text = str(stats.health) + " skl_p" + str(stats.skill_points)+ "used_skl_p" + str(stats.used_skill_points)
+	if Engine.get_physics_frames() % 120 == 0:
+		equipment.updateEquipment()
 	mouseMode()
-	animation.animationOrder(self,stats)
-	
 	var on_floor = is_on_floor() # State control for is jumping/falling/landing
 	
 	movement_speed = 0
@@ -79,10 +83,21 @@ func movement(delta)->void:
 	previous_movement_mode = movement_mode
 	movement_mode = "idle"
 
+	var input_direction = Vector3(
+		Input.get_action_strength("left") - Input.get_action_strength("right"),
+		0,
+		Input.get_action_strength("forward") - Input.get_action_strength("backward")
+	)
+
+	var movement_input = input_direction.length() > 0
+
+	if anim_locks["stop_run"] and movement_input:
+		anim_locks["stop_run"] = false
+
 	var locked = false
 
 	for anim_name in anim_locks.keys():
-		if anim_name == "jump":
+		if anim_name == "jump" or anim_name == "stop_run":
 			continue
 
 		if anim_locks[anim_name]:
@@ -94,9 +109,7 @@ func movement(delta)->void:
 	moving = false
 
 	if !locked:
-		var input_direction = Vector3(Input.get_action_strength("left") - Input.get_action_strength("right"),0,Input.get_action_strength("forward") - Input.get_action_strength("backward"))
-
-		if input_direction.length() > 0:
+		if movement_input:
 			direction = input_direction.rotated(Vector3.UP,h_rot).normalized()
 
 			moving = true
@@ -119,19 +132,22 @@ func movement(delta)->void:
 			direction = Vector3.ZERO
 
 		if Input.is_action_pressed("aim"):
-			player_mesh.rotation.y = lerp_angle(player_mesh.rotation.y, $Camroot/h.rotation.y, delta * angular_acceleration)
+			player_mesh.rotation.y = lerp_angle(player_mesh.rotation.y,$Camroot/h.rotation.y,delta * angular_acceleration)
 		elif direction != Vector3.ZERO:
-			player_mesh.rotation.y = lerp_angle(player_mesh.rotation.y, atan2(direction.x,direction.z) - rotation.y, delta * angular_acceleration)
+			player_mesh.rotation.y = lerp_angle(player_mesh.rotation.y,atan2(direction.x,direction.z) - rotation.y,delta * angular_acceleration)
 	else:
 		moving = false
 		movement_mode = "idle"
 		direction = Vector3.ZERO
 
 	horizontal_velocity = horizontal_velocity.linear_interpolate(direction.normalized() * movement_speed,acceleration * delta)
+
 	movement.z = horizontal_velocity.z + vertical_velocity.z
 	movement.x = horizontal_velocity.x + vertical_velocity.x
 	movement.y = vertical_velocity.y
+
 	move_and_slide(movement,Vector3.UP)
+
 
 
 var last_dash_input = ""
@@ -181,7 +197,29 @@ func propulsion(power):
 
 
 
-
+var blend = 0.125
+func animationOrder()->void:
+	for anim_name in anim_locks.keys():
+		if anim_locks[anim_name]:
+			if animation.current_animation != anim_name:
+				if animation.has_animation(anim_name):
+					animation.play(anim_name,blend)
+				else:
+					print("Missing animation: ",anim_name)
+					animation.play("land",blend)
+			return
+	if !is_on_floor():
+		animation.play("fall",blend)
+	elif moving:
+		if movement_mode == "run":
+			animation.play("run_cycle",0,stats.agility)
+		elif movement_mode == "walk":
+			animation.play("walk_cycle")
+	else:
+		animation.play("idle_cycle",blend)
+		
+		
+		
 
 
 

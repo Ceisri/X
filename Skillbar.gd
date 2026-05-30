@@ -50,6 +50,9 @@ func expandCollapse()->void:
 
 
 
+
+onready var skill_tree =   $"../SkillTreeRoot/SkillsTreeHolder"
+
 func skills(slot)->void:
 	if slot == null:
 		return
@@ -57,26 +60,24 @@ func skills(slot)->void:
 		return
 
 	var path = slot.texture.resource_path
+
 	if active_cooldowns.has(path):
 		return
 
-	if path == PlayerSkills.dodge.get_path():
-		animationcalls.unlockAnim()
-		player.anim_locks["dodge"] = true
-		active_cooldowns[path] = PlayerSkills.getCooldown(path)
-		saveCooldowns()
-	elif path == PlayerSkills.cleave.get_path():
-		animationcalls.unlockAnim()
-		player.anim_locks["cleave"] = true
-		active_cooldowns[path] = PlayerSkills.getCooldown(path)
-		saveCooldowns()
-	elif path == PlayerSkills.battlecry.get_path():
-		animationcalls.unlockAnim()
-		player.anim_locks["battlecry"] = true
-		active_cooldowns[path] = PlayerSkills.getCooldown(path)
-		saveCooldowns()
+	for skill in PlayerSkills.skills:
+		var texture = PlayerSkills.skills[skill]
 
+		if path == texture.resource_path:
+			if !skill_tree.skills.has(skill):
+				return
+			if skill_tree.skills[skill] <= 0:
+				return
 
+			animationcalls.unlockAnim()
+			player.anim_locks[skill] = true
+			active_cooldowns[path] = PlayerSkills.getCooldown(path)
+			saveCooldowns()
+			return
 func updateCooldowns(delta)->void:
 	for button in grid.get_children():
 		if !button.has_node("Slot"):
