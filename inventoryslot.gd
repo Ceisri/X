@@ -1,23 +1,33 @@
 extends TextureButton
 # inventory slot script
 
+signal quantity_changed(new_quantity)
+
 onready var icon = get_node_or_null("Slot")
 onready var quantity_label = get_node_or_null("Quantity")
 onready var inventory = get_node_or_null("../../..")
 
-var quantity = 0
+var quantity = 0 setget set_quantity
 var type = "item"
 var stackable = false
 var max_quantity = 9999999999
+
 
 func _ready():
 	if not icon:
 		print("InventorySlot: missing Slot node")
 	if not quantity_label:
 		print("InventorySlot: missing Quantity label")
+
+	connect("quantity_changed", self, "displayQuantity")
 	
 	updateStackableFromTexture()
 	displayQuantity()
+
+
+func set_quantity(value):
+	quantity = value
+	emit_signal("quantity_changed", quantity)
 
 
 func updateStackableFromTexture():
@@ -36,10 +46,7 @@ func updateStackableFromTexture():
 		stackable = false
 	else:
 		stackable = true
-func _physics_process(delta):
-	if Engine.get_physics_frames() % 132 == 0:
-		if visible:
-			displayQuantity()
+
 
 func displayQuantity():
 	if not icon:
@@ -59,6 +66,7 @@ func displayQuantity():
 		if quantity_label:
 			quantity_label.text = ""
 		icon.texture = null
+
 
 func get_drag_data(position: Vector2):
 	if not icon:
@@ -80,6 +88,7 @@ func get_drag_data(position: Vector2):
 	displayQuantity()
 	return data
 
+
 func can_drop_data(position, data):
 	if typeof(data) != TYPE_DICTIONARY:
 		print("can_drop_data: invalid data type")
@@ -94,6 +103,7 @@ func can_drop_data(position, data):
 	data["target_quantity"] = quantity
 
 	return data.get("type", "") != "skill"
+
 
 func drop_data(position, data):
 	if typeof(data) != TYPE_DICTIONARY:

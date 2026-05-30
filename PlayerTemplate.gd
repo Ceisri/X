@@ -7,6 +7,8 @@ onready var stats =$Stats
 onready var camroot = $Camroot
 onready var camera_v = $Camroot/h/v
 onready var skillbar = $UI/Skillbar
+onready var loot = $UI/Loot
+
 var save_id = "player"
 var entity_name = "Victor"
 
@@ -28,7 +30,6 @@ var acceleration = int()
 var can_move= true
 
 
-
 var anim_locks = {
 	"cleave":false,
 	"battlecry":false,
@@ -48,6 +49,8 @@ var anim_locks = {
 
 
 func _physics_process(delta):
+	if !movement_mode == "idle":
+		loot.closeLoot()
 	animationOrder()
 	jump()
 	movement(delta)
@@ -56,12 +59,13 @@ func _physics_process(delta):
 	dash()
 	if Input.is_action_just_pressed("character"):
 		equipment.visible = !equipment.visible
+		stats.health -= 10
+		stats.arcane -= 4
 	if Engine.get_physics_frames() % 4000 == 0:
 		saveInventoryData()
 	if Engine.get_physics_frames() % 3 == 0:
 		equipment.updateEquipment()
 		$UI.crossairInspect(self)
-		$Label3D.text = str(stats.health) + " skl_p" + str(stats.skill_points)+ "used_skl_p" + str(stats.used_skill_points)
 	if Engine.get_physics_frames() % 120 == 0:
 		equipment.updateEquipment()
 	mouseMode()
@@ -294,7 +298,6 @@ func dig():
 
 func getHit(attacker: Node, damage: float) -> void:
 	stats.health -= damage
-	$Label3D.text = str(stats.health)
 func saveInventoryData():
 	# Call savedata() function on each child of inventory_grid that belongs to the group "Inventory"
 	for child in $UI/Skillbar/GridContainer.get_children():
@@ -308,7 +311,6 @@ func _ready(): # Camera based Rotation
 		child.get_node("Slot").player = self
 		child.parent = self 
 		child.get_node("Slot").loadData()
-	$Label3D.text = str(stats.health)
 	direction = Vector3.BACK.rotated(Vector3.UP, $Camroot/h.global_transform.basis.get_euler().y)
 	
 func _input(event): # All major mouse and button input events

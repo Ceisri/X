@@ -3,6 +3,7 @@ extends Control
 onready var player = $"../.."
 onready var stats = $"../../Stats"
 onready var close_button = $Close
+onready var combine_button = $Combine
 onready var debug_give_me_items = $DebugGiveMeItems
 onready var inventory_grid = $ScrollContainer/GridContainer
 
@@ -18,14 +19,68 @@ const SAVE_FILE = "/inventory.save"
 func _physics_process(delta):
 	if Input.is_action_just_pressed("Inventory"):
 		visible = !visible
-		saveData()
 
 func _ready()->void:
 	close_button.connect("pressed",self,"collapse")
+	combine_button.connect("pressed",self,"combine")
 	debug_give_me_items.connect("pressed",self,"getRandItems")
 
 	setupInventorySlots()
 	loadData()
+	updateInventory()
+func combine()->void:
+	var slots = inventory_grid.get_children()
+
+	for i in range(slots.size()):
+		var slot_a = slots[i]
+		var texture_a = slot_a.get_node("Slot").texture
+
+		if texture_a == null:
+			continue
+
+		if texture_a in Items.armors.values():
+			continue
+
+		for j in range(i + 1, slots.size()):
+			var slot_b = slots[j]
+			var texture_b = slot_b.get_node("Slot").texture
+
+			if texture_b == null:
+				continue
+
+			if texture_b in Items.armors.values():
+				continue
+
+			if texture_a != texture_b:
+				continue
+
+			var max_quantity = max(slot_a.max_quantity, 9999999999)
+			var space_left = max_quantity - slot_a.quantity
+
+			if space_left <= 0:
+				break
+
+			var amount_to_move = min(space_left, slot_b.quantity)
+
+			slot_a.stackable = true
+			slot_b.stackable = true
+
+			slot_a.quantity += amount_to_move
+			slot_b.quantity -= amount_to_move
+
+			if slot_b.quantity <= 0:
+				slot_b.quantity = 0
+				slot_b.get_node("Slot").texture = null
+
+			slot_a.displayQuantity()
+			slot_b.displayQuantity()
+
+	updateInventory()
+
+
+
+
+func updateInventory()->void:
 	for child in inventory_grid.get_children():
 		child.displayQuantity()
 func setupInventorySlots():
@@ -71,6 +126,7 @@ func _on_inventory_slot_pressed(index):
 
 	last_pressed_index = index
 	last_press_time = current_time
+	updateInventory()
 
 
 func useItem(index):
@@ -98,12 +154,10 @@ func useItem(index):
 			button.quantity = 0
 			slot.texture = null
 
-		CommonBehaviours.addStackableItem(
-			inventory_grid,
-			Items.flasks["empty"]
-		)
+		CommonBehaviours.addStackableItem(inventory_grid,Items.flasks["empty"],1)
 	button.displayQuantity()
-	saveData()
+	updateInventory()
+
 func clearSlot(index):
 	var button = inventory_grid.get_node("InventorySlot" + str(index))
 	var slot = button.get_node("Slot")
@@ -112,7 +166,7 @@ func clearSlot(index):
 	slot.texture = null
 
 	button.displayQuantity()
-	saveData()
+	updateInventory()
 func saveData():
 	var dir = Directory.new()
 	var character_dir = SAVE_DIR + player.entity_name
@@ -180,58 +234,29 @@ func loadData():
 
 func collapse()->void:
 	hide()
-	saveData()
+	updateInventory()
 
 func getRandItems()->void:
 	for child in inventory_grid.get_children():
 		child.displayQuantity()
-	CommonBehaviours.addStackableItem(
-		inventory_grid,
-		Items.flasks["energy"]
-	)
-	CommonBehaviours.addNotStackableItem(
-		inventory_grid,
-		Items.armors["armor1"]
-	)
-	CommonBehaviours.addStackableItem(
-		inventory_grid,
-		Items.flasks["energy"]
-	)
+	CommonBehaviours.addStackableItem(inventory_grid,Items.flasks["energy"],10)
+	CommonBehaviours.addNotStackableItem(inventory_grid,Items.armors["torso1"])
+	CommonBehaviours.addNotStackableItem(inventory_grid,Items.armors["torso2"])
+	CommonBehaviours.addNotStackableItem(inventory_grid,Items.armors["torso1"])
+	CommonBehaviours.addNotStackableItem(inventory_grid,Items.armors["feet1"])
+	CommonBehaviours.addNotStackableItem(inventory_grid,Items.armors["hands1"])
+	CommonBehaviours.addNotStackableItem(inventory_grid,Items.armors["hands2"])
+	CommonBehaviours.addStackableItem(inventory_grid,Items.flasks["energy"],5)
+	CommonBehaviours.addStackableItem(inventory_grid,Items.flasks["medicine"],5)
+	CommonBehaviours.addStackableItem(inventory_grid,Items.flasks["medicine"],5)
+	CommonBehaviours.addStackableItem(inventory_grid,Items.flasks["poison"],5)
+	CommonBehaviours.addStackableItem(inventory_grid,Items.flasks["power"],5)
+	CommonBehaviours.addStackableItem(inventory_grid,Items.flasks["power"],5)
 
-	CommonBehaviours.addStackableItem(
-		inventory_grid,
-		Items.flasks["medicine"]
-	)
-
-	CommonBehaviours.addStackableItem(
-		inventory_grid,
-		Items.flasks["medicine"]
-	)
-
-	CommonBehaviours.addStackableItem(
-		inventory_grid,
-		Items.flasks["poison"]
-	)
-
-	CommonBehaviours.addStackableItem(
-		inventory_grid,
-		Items.flasks["poison"]
-	)
-
-	CommonBehaviours.addStackableItem(
-		inventory_grid,
-		Items.flasks["power"]
-	)
-
-	CommonBehaviours.addStackableItem(
-		inventory_grid,
-		Items.flasks["power"]
-	)
-
-	saveData()
+	updateInventory()
 
 func _on_inventory_slot_mouse_entered(index):
-	pass
+	updateInventory()
 
 func _on_inventory_slot_mouse_exited(index):
-	pass
+	updateInventory()
