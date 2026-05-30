@@ -27,7 +27,6 @@ var is_running:bool = false
 var is_sitting:bool = false
 var is_swimming:bool = false
 var is_dead:bool = false
-
 var on_guard:bool = false 
 
 var target: Node = null
@@ -46,6 +45,7 @@ var anim_locks = {
 	"atk4":false,
 	"atk5":false,
 	"atk6":false,
+	"dodge":false,
 	"stop_run":false,
 	"parry":false,
 	"sit":false,
@@ -54,6 +54,7 @@ var anim_locks = {
 	"die":false,
 	"prepare":false,
 	"staggered":false,
+	
 }
 
 func _ready()->void:
@@ -417,7 +418,9 @@ func playLocks()->bool:
 	if anim_locks["prepare"]:
 		playAnim("prepare")
 		return true
-
+	if anim_locks["dodge"]:
+		playAnim("dodge" if animation.has_animation("dodge") else "dodge")
+		return true
 	if anim_locks["atk4"]:
 		playAnim("atk4" if animation.has_animation("atk4") else "atk1")
 		return true
@@ -518,6 +521,8 @@ func animations()->void:
 		animation.play("atk3",blend)
 	elif anim_locks["prepare"]:
 		animation.play("prepare",blend)
+	elif anim_locks["dodge"]:
+		animation.play("dodge",blend)
 	elif anim_locks["atk4"]:
 		animation.play("atk4",blend)
 	elif anim_locks["atk5"]:
@@ -566,55 +571,6 @@ func animations()->void:
 		animation.play(turn_anim,blend)
 		return
 
-	if anim_locks["staggered"]:
-		animation.play("staggered",blend)
-	elif anim_locks["atk1"]:
-		animation.play("atk1",blend)
-	elif anim_locks["atk2"]:
-		animation.play("atk2",blend)
-	elif anim_locks["atk3"]:
-		animation.play("atk3",blend)
-	elif anim_locks["prepare"]:
-		animation.play("prepare",blend)
-	elif anim_locks["atk4"]:
-		if animation.has_animation("atk4"):
-			animation.play("atk4",blend)
-		else:
-			animation.play("atk1",blend)
-	elif anim_locks["atk5"]:
-		if animation.has_animation("atk5"):
-			animation.play("atk5",blend)
-		else:
-			animation.play("atk1",blend)
-	elif anim_locks["atk6"]:
-		if animation.has_animation("atk6"):
-			animation.play("atk6",blend)
-		else:
-			animation.play("atk1",blend)
-	elif is_running:
-		if target != null:
-			animation.play("run_cycle")
-		elif animation.has_animation("trot_cycle"):
-			animation.play("trot_cycle")
-		else:
-			animation.play("run_cycle")
-	elif is_walking:
-		animation.play("walk_cycle")
-	elif is_sitting:
-		if anim_locks["sit"]:
-			if animation.has_animation("sit"):
-				animation.play("sit",blend)
-			else:
-				animation.play("idle_sit",blend)
-		elif anim_locks["stop_sit"]:
-			if animation.has_animation("stop_sit"):
-				animation.play("stop_sit",0.5)
-			else:
-				animation.play("idle_cycle",blend)
-		else:
-			animation.play("idle_sit",blend)
-	else:
-		animation.play("idle_cycle",0.4)
 
 func lockAnim(anim_name):
 	for key in anim_locks:

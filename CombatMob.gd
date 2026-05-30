@@ -25,7 +25,7 @@ var skill_order = []
 var current_skill = -1
 
 func _ready():
-	skill_icons = Skills.getSpeciesSkills($"../Stats".species)
+	skill_icons = MobSkills.getSpeciesSkills($"../Stats".species)
 
 	skill_order = skill_icons.duplicate()
 
@@ -52,17 +52,12 @@ func sequenceMeleeContinue():
 		if lock:
 			return
 
+	if parent.animation.has_animation("dodge") and randf() <= 0.1:
+		parent.lockAnim("dodge")
+		return
+
 	if skill_order.empty():
-		parent.lockAnim("prepare")
-		return
-
-	if play_prepare:
-		play_prepare = false
-		attack_phase = true
-		parent.lockAnim("prepare")
-		return
-
-	if !attack_phase:
+		parent.lockAnim("atk1")
 		return
 
 	var tries = 0
@@ -73,42 +68,30 @@ func sequenceMeleeContinue():
 
 		var skill = skill_order[current_skill]
 
-		if Skills.canUseSkill(skill,active_cooldowns):
+		var can_use = false
+
+		if MobSkills.getAnim(skill) == "atk1":
+			can_use = true
+		else:
+			can_use = MobSkills.canUseSkill(skill,active_cooldowns)
+
+		if can_use:
 			current_cast_skill = skill
 
-			Skills.useSkillName(skill,active_cooldowns,haste,self)
+			if MobSkills.getAnim(skill) != "atk1":
+				MobSkills.useSkillName(skill,active_cooldowns,haste,self)
 
-			match Skills.getAnim(skill):
-				"atk1":
-					parent.lockAnim("atk1")
+			parent.lockAnim(MobSkills.getAnim(skill))
 
-				"atk2":
-					parent.lockAnim("atk2")
-
-				"atk3":
-					parent.lockAnim("atk3")
-
-				"atk4":
-					parent.lockAnim("atk4")
-
-				_:
-					parent.lockAnim("prepare")
-
-			play_prepare = true
-			attack_phase = false
 			current_skill += 1
 			return
 
 		current_skill += 1
 		tries += 1
 
-	parent.lockAnim("prepare")
-	
-	
-	
-	
+	parent.lockAnim("atk1")
 func sortSkills(a,b):
-	return Skills.getCooldown(a) > Skills.getCooldown(b)
+	return MobSkills.getCooldown(a) > MobSkills.getCooldown(b)
 
 func updateTargetHistory(target):
 	target_history.append(target.global_transform.origin)
@@ -117,22 +100,6 @@ func updateTargetHistory(target):
 		delayed_target_pos = target_history.pop_front()
 		using_delayed_target = true
 
-#
-#func sequenceMeleeContinue():
-#	if melee_step > 7:
-#		melee_step = 1
-#
-#	if melee_step % 3 == 0:
-#		parent.lockAnim("prepare")
-#	elif melee_step % 2 == 0:
-#		parent.lockAnim("atk1")
-#	elif melee_step == 1:
-#		parent.lockAnim("atk2")
-#	elif melee_step == 5:
-#		parent.lockAnim("atk3")
-#	elif melee_step == 7:
-#		parent.lockAnim("atk4")
-#
 
 func rotateToTarget(speed:float,target_pos:Vector3):
 	if parent.animation.current_animation == "prepare":

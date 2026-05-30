@@ -1,9 +1,11 @@
 extends Node
 
+
+
 export var is_civilised:bool = false
 export var is_tense:bool = false
 export var species:String = "species"
-
+export var sex:String = "male"
 
 export var food_chain: int = 1
 export var is_predator:bool = false
@@ -11,14 +13,51 @@ export var hunt_radius = 50
 
 export var weight = 10
 
+var skill_points = 100
+var used_skill_points = 0
 
 var nutrition = 60
 var hydration = 100
 
 
 
-var health = 100
-export var max_health = 200
+signal health_changed
+signal arcane_changed
+
+export var health = 100 setget setHealth
+export var arcane = 100 setget setArcane
+
+export var max_health = 100 setget setMaxHealth
+export var max_arcane = 100 setget setMaxArcane
+
+
+func setHealth(value):
+	health = clamp(value, 0, max_health)
+	emit_signal("health_changed")
+
+
+func setArcane(value):
+	arcane = clamp(value, 0, max_arcane)
+	emit_signal("arcane_changed")
+
+
+func setMaxHealth(value):
+	max_health = max(1, value)
+
+	if health > max_health:
+		health = max_health
+
+	emit_signal("health_changed")
+
+
+func setMaxArcane(value):
+	max_arcane = max(1, value)
+
+	if arcane > max_arcane:
+		arcane = max_arcane
+
+	emit_signal("arcane_changed")
+	
 export var walk_speed = 3
 export var run_speed = 7
 var last_health = -1
@@ -63,76 +102,6 @@ func _physics_process(delta)->void:
 		
 	
 
-
-
-
-
-
-func _ready():
-	switchPalette()
-
-onready var mesh = $"../Armature/Skeleton/Mesh"
-export var palette:String = "forest"
-
-func switchPalette():
-	var found_species = ""
-
-	var dir = Directory.new()
-
-	if dir.open("res://world") != OK:
-		print("Missing world folder")
-		return
-
-	dir.list_dir_begin(true, true)
-
-	var folder = dir.get_next()
-
-	while folder != "":
-		if dir.current_is_dir() and folder.to_lower() == species.to_lower():
-			found_species = folder
-			break
-
-		folder = dir.get_next()
-
-	dir.list_dir_end()
-
-	if found_species == "":
-		print("Species folder not found: ", species)
-		return
-
-	var texture_folder = "res://world/%s/texture/" % found_species
-
-	if dir.open(texture_folder) != OK:
-		print("Texture folder missing: ", texture_folder)
-		return
-
-	var palettes = {}
-
-	dir.list_dir_begin(true, true)
-
-	var file = dir.get_next()
-
-	while file != "":
-		if file.ends_with(".png"):
-			var palette_name = file.get_basename()
-			palettes[palette_name] = texture_folder + file
-
-		file = dir.get_next()
-
-	dir.list_dir_end()
-
-	if !palettes.has(palette):
-		print("Palette missing: ", palette)
-		return
-
-	var tex = load(palettes[palette])
-
-	var mat = SpatialMaterial.new()
-	mat.flags_unshaded = true
-	mat.albedo_texture = tex
-
-	mesh.material_override = mat
-	
 func die():
 	#call this at the end of every die animation, with add track  > stats from animation player
 	is_finished = true

@@ -8,8 +8,8 @@ onready var stats = $"../Stats"
 
 func _ready():
 	pass
-#	cleanCallTracks()
-#	connectUnlockAnimLastFrames()
+	cleanCallTracks()
+	connectUnlockAnimLastFrames()
 	loadAnimations()
 func lockMov():
 	parent.can_move = false
@@ -28,10 +28,10 @@ func excecutespell()->void:
 	if skill == "":
 		return
 
-	if !Skills.isAttack(skill):
+	if !MobSkills.isAttack(skill):
 		return
 
-	var damage = Skills.getDamage(skill)
+	var damage = MobSkills.getDamage(skill)
 
 	for body in parent.dmg_area.get_overlapping_bodies():
 		if body == parent:
@@ -40,17 +40,17 @@ func excecutespell()->void:
 		if body.has_method("getHit"):
 			body.getHit(parent,damage)
 
-			if Skills.isStun(skill):
+			if MobSkills.isStun(skill):
 				# add stun logic here later
 				pass
 
-			if Skills.isLifesteal(skill):
-				var heal = damage * Skills.getLifestealPower(skill)
+			if MobSkills.isLifesteal(skill):
+				var heal = damage * MobSkills.getLifestealPower(skill)
 
 				parent.stats.health += heal
 			
-			if Skills.isCooldownReduce(skill):
-				var reduction = Skills.getCooldownReducePower(skill)
+			if MobSkills.isCooldownReduce(skill):
+				var reduction = MobSkills.getCooldownReducePower(skill)
 
 				for cd_skill in parent.combat.active_cooldowns.keys():
 					parent.combat.active_cooldowns[cd_skill] *= (1.0 - reduction)
@@ -110,7 +110,12 @@ func die()->void:
 
 func connectUnlockAnimLastFrames():
 	var species = stats.species
-	var save_path = "res://world/mobs/%s/animations/" % species
+	var save_path = ""
+
+	if species == "human":
+		save_path = "res://world/player/human/animations/"
+	else:
+		save_path = "res://world/mobs/%s/animations/" % species
 
 	var dir = Directory.new()
 
@@ -125,7 +130,7 @@ func connectUnlockAnimLastFrames():
 
 		var unlock_track = anim.add_track(Animation.TYPE_METHOD)
 
-		anim.track_set_path(unlock_track,NodePath("AnimationCalls"))
+		anim.track_set_path(unlock_track, NodePath("AnimationCalls"))
 
 		anim.track_insert_key(
 			unlock_track,
@@ -140,7 +145,7 @@ func connectUnlockAnimLastFrames():
 			if anim_name == "atk%s" % n or anim_name == "prepare":
 				var seq_track = anim.add_track(Animation.TYPE_METHOD)
 
-				anim.track_set_path(seq_track,NodePath("AnimationCalls"))
+				anim.track_set_path(seq_track, NodePath("AnimationCalls"))
 
 				anim.track_insert_key(
 					seq_track,
@@ -154,15 +159,20 @@ func connectUnlockAnimLastFrames():
 				break
 
 		ResourceSaver.save(
-			"%s%s.tres" % [save_path,anim_name],
+			"%s%s.tres" % [save_path, anim_name],
 			anim
 		)
 
 
+
 func cleanCallTracks():
 	var species = stats.species
-	var save_path = "res://world/mobs/%s/animations/" % species
+	var save_path = ""
 
+	if species == "human":
+		save_path = "res://world/player/human/animations/"
+	else:
+		save_path = "res://world/mobs/%s/animations/" % species
 	var dir = Directory.new()
 
 	if !dir.dir_exists(save_path):
@@ -185,8 +195,12 @@ func cleanCallTracks():
 
 func loadAnimations():
 	var species = stats.species
-	var save_path = "res://world/mobs/%s/animations/" % species
+	var save_path = ""
 
+	if species == "human":
+		save_path = "res://world/player/human/animations/"
+	else:
+		save_path = "res://world/mobs/%s/animations/" % species
 	var dir = Directory.new()
 
 	if dir.open(save_path) != OK:
