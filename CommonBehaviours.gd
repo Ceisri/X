@@ -1,7 +1,34 @@
 extends Node
 
+var FloatingResScene: PackedScene = preload("res://world/player/modules/Interface/scenes/FloatingRes.tscn")
 
+func addNotStackableItem(inventory_grid, item_data):
+	for child in inventory_grid.get_children():
+		var slot = child.get_node("Slot")
 
+		if slot.texture == null:
+			slot.texture = item_data["icon"]
+			child.stackable = false
+			child.quantity = 1
+			child.max_quantity = 1
+			return
+func addStackableItem(inventory_grid,item_data,quantity:int=1):
+	for child in inventory_grid.get_children():
+		var slot = child.get_node("Slot")
+
+		if slot.texture == item_data.icon and child.stackable:
+			child.quantity += quantity
+			return
+
+	for child in inventory_grid.get_children():
+		var slot = child.get_node("Slot")
+
+		if slot.texture == null:
+			slot.texture = item_data.icon
+			child.stackable = true
+			child.quantity = quantity
+			child.max_quantity = 9999999999
+			return
 func spawn(controller,scene,position = null,mobName = "",nutrition = 100,health = 100,finished = false):
 	var RESPAWN_TIME = 10.0
 	var SPAWN_RANGE = 10.0
@@ -22,6 +49,14 @@ func spawn(controller,scene,position = null,mobName = "",nutrition = 100,health 
 	mob.set_meta("state","wander")
 	controller.add_child(mob)
 	return mob
+
+
+
+
+
+
+
+
 
 func gravity(mob):
 	var gravity = mob.stats.weight
