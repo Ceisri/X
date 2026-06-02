@@ -2,15 +2,23 @@ extends Node
 
 onready var parent = $".."
 onready var animation = $"../character/AnimationPlayer"
-onready var tween = $"../Tween"
-onready var dmg_area = $"../AreaDamage"
+onready var tween =  $Tween
+onready var timer = $Timer
+onready var dmg_area = $"../Area"
 onready var stats = $"../Stats"
 
-func _ready():
-	cleanCallTracks()
-	connectUnlockAnimLastFrames()
-	loadAnimations()
 
+
+
+
+
+
+			
+func _ready():
+#	cleanCallTracks()
+#	connectUnlockAnimLastFrames()
+#	loadAnimations()
+	timer.connect("timeout", self, "_on_cleave_timeout")
 func lockMov():
 	parent.can_move = false
 
@@ -21,6 +29,19 @@ func unlockAnim():
 	for key in parent.anim_locks:
 		parent.anim_locks[key] = false
 
+
+func cleave1stpart():
+	parent.can_cleav_cont = true
+	timer.start()
+
+func _on_cleave_timeout():
+	parent.can_cleav_cont = false
+	print(parent.can_cleav_cont)
+	timer.stop()
+	
+	
+func cleavecontend():
+	parent.can_cleav_cont = false
 
 func excecutespell()->void:
 	var skill = parent.combat.current_cast_skill
@@ -60,24 +81,10 @@ func excecutespell()->void:
 var dash_power = 0.0
 var dash_direction = Vector3.ZERO
 
-func dashForward(dash_distance:float):
-	dash_power = dash_distance
-	dash_direction = -parent.global_transform.basis.z.normalized()
-
-	tween.stop_all()
-
-	tween.interpolate_method(
-		self,
-		"updateDash",
-		dash_power,
-		0.0,
-		0.18,
-		Tween.TRANS_CUBIC,
-		Tween.EASE_OUT
-	)
-
-	tween.start()
-
+func dashForward(dash_distance: float = 3) -> void:
+	parent.propulsion(dash_distance)
+	
+	
 func updateDash(power:float):
 	var step = dash_direction * power * get_physics_process_delta_time()
 
@@ -110,6 +117,9 @@ func pushTarget(power:float):
 func die()->void:
 	parent.is_dead = true
 
+
+
+
 func connectUnlockAnimLastFrames():
 	var save_path = "res://world/player/human/animations/"
 
@@ -119,9 +129,6 @@ func connectUnlockAnimLastFrames():
 		dir.make_dir_recursive(save_path)
 
 	for anim_name in animation.get_animation_list():
-		if !(anim_name in parent.anim_locks):
-			continue
-
 		var anim = animation.get_animation(anim_name)
 
 		if anim == null:
@@ -134,9 +141,9 @@ func connectUnlockAnimLastFrames():
 		var unlock_track = anim.add_track(Animation.TYPE_METHOD)
 
 		anim.track_set_path(
-	unlock_track,
-	NodePath("../AnimationCalls")
-)
+			unlock_track,
+			NodePath("../AnimationCalls")
+		)
 
 		anim.track_insert_key(
 			unlock_track,
@@ -151,6 +158,9 @@ func connectUnlockAnimLastFrames():
 			"%s%s.tres" % [save_path,anim_name],
 			anim
 		)
+
+
+
 
 func cleanCallTracks():
 	var save_path = "res://world/player/human/animations/"

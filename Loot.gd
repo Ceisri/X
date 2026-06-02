@@ -9,8 +9,8 @@ onready var close_button = $Close
 
 var current_corpse = null
 
-# corpse_id -> [{texture, quantity}]
-var corpse_loot_data = {}
+	
+var corpse_loot_data = {}# corpse_id -> [{texture, quantity}]
 
 func _ready():
 	close_button.connect("pressed",self,"closeLoot")
@@ -125,8 +125,7 @@ func loadLootIntoGrid(lootData):
 		var holder = loot_grid.get_child(i)
 
 		holder.quantity = lootData[i]["quantity"]
-		holder.get_node("Slot").texture = Items.food[lootData[i]["item_key"]]
-
+		holder.get_node("Slot").texture = Items.food[lootData[i]["item_key"]]["icon"]
 
 func ensureSlotCount(amount):
 	while loot_grid.get_child_count() < amount:
@@ -165,7 +164,7 @@ func saveCurrentCorpseLoot():
 			var itemKey = ""
 
 			for key in Items.food:
-				if Items.food[key] == slot.texture:
+				if Items.food[key]["icon"] == slot.texture:
 					itemKey = key
 					break
 
@@ -176,7 +175,6 @@ func saveCurrentCorpseLoot():
 				})
 
 	corpse_loot_data[corpseKey] = savedLoot
-
 
 func saveData():
 	saveCurrentCorpseLoot()

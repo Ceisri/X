@@ -23,112 +23,277 @@ var current_torso_node = null
 var current_hands_node = null
 var current_feet_node = null
 
-const TORSO_0 = preload("res://world/player/human/male/Torso0.tscn")
-const TORSO_1 = preload("res://world/player/human/male/Torso1.tscn")
-const TORSO_2 = preload("res://world/player/human/male/Torso2.tscn")
 
-const HANDS_0 = preload("res://world/player/human/male/Hands0.tscn")
-const HANDS_1 = preload("res://world/player/human/male/Hands1.tscn")
-const HANDS_2 = preload("res://world/player/human/male/Hands2.tscn")
+var current_mainhand_id = -1
+var current_offhand_id = -1
 
-const FEET_0 = preload("res://world/player/human/male/Feet0.tscn")
-const FEET_1 = preload("res://world/player/human/male/Feet1.tscn")
-
+var current_mainhand_node = null
+var current_offhand_node = null
 
 func _ready():
 	close_button.connect("pressed", self, "collapse")
 	loadData()
 
 
-func collapse()->void:
+func collapse() -> void:
 	hide()
 
 
-func updateEquipment()->void:
+
+func get_equipment_stats():
+	var stats_node = $"../../Stats"
+
+	for dmg_type in stats_node.weapon_damages:
+		stats_node.weapon_damages[dmg_type] = 0
+
+	for dmg_type in stats_node.defences:
+		stats_node.defences[dmg_type] = 0
+
+	stats_node.max_health = 100
+
+	applyArmorStats(slot_torso, Items.armors, stats_node)
+	applyArmorStats(slot_hands, Items.armors, stats_node)
+	applyArmorStats(slot_feet, Items.armors, stats_node)
+
+	applyWeaponStats(slot_mainhand, Items.weapons, stats_node)
+	applyWeaponStats(slot_offhand, Items.weapons, stats_node)
+
+	return stats_node
+
+func applyArmorStats(slot, armor_table, stats_node):
+	if slot.texture == null:
+		return
+
+	for armor_id in armor_table:
+		var armor = armor_table[armor_id]
+
+		if armor["icon"] != slot.texture:
+			continue
+
+		stats_node.max_health += armor.get("max_health", 0)
+
+		if armor.has("defences"):
+			for defence_name in armor["defences"]:
+				var dmg_type = stats_node.damage_type[defence_name]
+
+				stats_node.defences[dmg_type] += armor["defences"][defence_name]
+
+		break
+func applyWeaponStats(slot, weapon_table, stats_node):
+	if slot.texture == null:
+		return
+
+	for weapon_id in weapon_table:
+		var weapon = weapon_table[weapon_id]
+
+		if weapon["icon"] != slot.texture:
+			continue
+
+		if weapon.has("damages"):
+			for damage_name in weapon["damages"]:
+				var dmg_type = stats_node.damage_type[damage_name]
+
+				stats_node.weapon_damages[dmg_type] += weapon["damages"][damage_name]
+
+		break
+
+
+
+
+
+
+
+
+
+
+func _load_scene(path: String) -> PackedScene:
+	if !ResourceLoader.exists(path):
+		return null
+
+	var scene = load(path)
+
+	if scene is PackedScene:
+		return scene
+
+	return null
+
+
+func _remove_materials(node: Node) -> void:
+	if node is MeshInstance:
+		node.material_override = null
+
+		for i in range(node.get_surface_material_count()):
+			node.set_surface_material(i, null)
+
+	for child in node.get_children():
+		_remove_materials(child)
+
+
+func _instance_without_material(path: String) -> Node:
+	var scene = _load_scene(path)
+
+	if !scene:
+		return null
+
+	var instance = scene.instance()
+
+	if instance:
+		_remove_materials(instance)
+
+	return instance
+
+
+const TORSO0_SCENE = preload("res://world/player/human/male/Torso0.tscn")
+const TORSO1_SCENE = preload("res://world/player/human/male/Torso1.tscn")
+const TORSO2_SCENE = preload("res://world/player/human/male/Torso2.tscn")
+
+const HANDS1_SCENE = preload("res://world/player/human/male/Hands1.tscn")
+const HANDS2_SCENE = preload("res://world/player/human/male/Hands2.tscn")
+
+const FEET0_SCENE = preload("res://world/player/human/male/Feet0.tscn")
+const FEET1_SCENE = preload("res://world/player/human/male/Feet1.tscn")
+
+const SWORD_SCENE = preload("res://world/player/weapons/Sword.tscn")
+const FORK_SCENE = preload("res://world/player/weapons/Fork.tscn")
+
+
+func updateEquipment() -> void:
 	var stats = $"../../Stats"
-	var species = stats.species
-	var sex = stats.sex
 
-	if species != "human":
+	if stats.species != "human":
 		return
 
-	if sex != "male":
+	if stats.sex != "male":
 		return
 
-	# TORSO
+	updateArmorCache(stats.species, stats.sex)
 
-	var torso_id = 0
-	var torso_scene = TORSO_0
+	var changed = equipmentChanged()
 
-	if slot_torso.texture == Items.armors["torso1"]:
+	if changed:
+		updateEquipmentCache()
+		updateTorso()
+		updateHands()
+		updateFeet()
+
+
+	updateWeapons()
+	
+	if changed:
+		get_equipment_stats()
+
+
+
+var torso_id
+var torso_scene
+
+var hands_id
+var hands_scene
+
+var feet_id
+var feet_scene
+
+func updateArmorCache(species:String, sex:String) -> void:
+	torso_id = 0
+	torso_scene = TORSO0_SCENE
+
+	if slot_torso.texture == Items.armors["torso1"]["icon"]:
 		torso_id = 1
-		torso_scene = TORSO_1
-	elif slot_torso.texture == Items.armors["torso2"]:
+		torso_scene = TORSO1_SCENE
+	elif slot_torso.texture == Items.armors["torso2"]["icon"]:
 		torso_id = 2
-		torso_scene = TORSO_2
+		torso_scene = TORSO2_SCENE
 
-	# HANDS
+	hands_id = 0
+	hands_scene = HANDS1_SCENE
 
-	var hands_id = 0
-	var hands_scene = HANDS_0
-
-	if slot_hands.texture == Items.armors["hands1"]:
+	if slot_hands.texture == Items.armors["hands1"]["icon"]:
 		hands_id = 1
-		hands_scene = HANDS_1
-	elif slot_hands.texture == Items.armors["hands2"]:
+		hands_scene = HANDS1_SCENE
+	elif slot_hands.texture == Items.armors["hands2"]["icon"]:
 		hands_id = 2
-		hands_scene = HANDS_2
+		hands_scene = HANDS2_SCENE
 
-	# FEET
+	feet_id = 0
+	feet_scene = FEET0_SCENE
 
-	var feet_id = 0
-	var feet_scene = FEET_0
-
-	if slot_feet.texture == Items.armors["feet1"]:
+	if slot_feet.texture == Items.armors["feet1"]["icon"]:
 		feet_id = 1
-		feet_scene = FEET_1
+		feet_scene = FEET1_SCENE
 
-	# nothing changed
+func equipmentChanged() -> bool:
+	return !(
+		current_species == $"../../Stats".species
+		and current_sex == $"../../Stats".sex
+		and current_torso_id == torso_id
+		and current_hands_id == hands_id
+		and current_feet_id == feet_id
+	)
 
-	if (
-		species == current_species
-		and sex == current_sex
-		and torso_id == current_torso_id
-		and hands_id == current_hands_id
-		and feet_id == current_feet_id
-	):
-		return
 
-	current_species = species
-	current_sex = sex
+func updateEquipmentCache() -> void:
+	current_species = $"../../Stats".species
+	current_sex = $"../../Stats".sex
 
 	current_torso_id = torso_id
 	current_hands_id = hands_id
 	current_feet_id = feet_id
 
-	# replace torso
+func replaceEquipmentNode(current_node, scene):
+	if is_instance_valid(current_node):
+		current_node.queue_free()
 
-	if is_instance_valid(current_torso_node):
-		current_torso_node.queue_free()
+	var node = scene.instance()
+	_remove_materials(node)
+	setUnshaded(node)
+	skeleton.add_child(node)
 
-	current_torso_node = torso_scene.instance()
-	skeleton.add_child(current_torso_node)
+	return node
 
-	# replace hands
+func updateTorso() -> void:
+	current_torso_node = replaceEquipmentNode(
+		current_torso_node,
+		torso_scene
+	)
 
-	if is_instance_valid(current_hands_node):
-		current_hands_node.queue_free()
+func updateHands() -> void:
+	current_hands_node = replaceEquipmentNode(
+		current_hands_node,
+		hands_scene
+	)
+func updateFeet() -> void:
+	current_feet_node = replaceEquipmentNode(
+		current_feet_node,
+		feet_scene
+	)
+var current_weapon_node = null
+func updateWeapons() -> void:
+	if is_instance_valid(current_weapon_node):
+		current_weapon_node.queue_free()
 
-	current_hands_node = hands_scene.instance()
-	skeleton.add_child(current_hands_node)
+	current_weapon_node = null
 
-	# replace feet
+	player.weapons = ""
 
-	if is_instance_valid(current_feet_node):
-		current_feet_node.queue_free()
+	var mainhand_path = slot_mainhand.texture.resource_path if slot_mainhand.texture else ""
+	var offhand_path = slot_offhand.texture.resource_path if slot_offhand.texture else ""
 
-	current_feet_node = feet_scene.instance()
-	skeleton.add_child(current_feet_node)
+	if mainhand_path == Items.weapons["sword"]["icon"].resource_path:
+		current_weapon_node = SWORD_SCENE.instance()
+		_remove_materials(current_weapon_node)
+		setUnshaded(current_weapon_node)
+		skeleton.add_child(current_weapon_node)
+
+		if offhand_path == "":
+			player.weapons = "one handed"
+
+	if mainhand_path == Items.weapons["fork"]["icon"].resource_path:
+		current_weapon_node = FORK_SCENE.instance()
+		_remove_materials(current_weapon_node)
+		setUnshaded(current_weapon_node)
+		skeleton.add_child(current_weapon_node)
+
+		player.weapons = "two handed"
 
 
 func saveData() -> void:
@@ -158,12 +323,10 @@ func loadData() -> void:
 	var path = SAVE_DIR + player.entity_name + ".save"
 	var file = File.new()
 
-	# first character creation
-
 	if !file.file_exists(path):
-		slot_torso.texture = Items.armors["torso1"]
-		slot_hands.texture = Items.armors["hands1"]
-		slot_feet.texture = Items.armors["feet1"]
+		slot_torso.texture = Items.armors["torso1"]["icon"]
+		slot_hands.texture = Items.armors["hands1"]["icon"]
+		slot_feet.texture = Items.armors["feet1"]["icon"]
 
 		slot_mainhand.texture = null
 		slot_offhand.texture = null
@@ -172,12 +335,10 @@ func loadData() -> void:
 		saveData()
 		return
 
-	# failed load
-
 	if file.open(path, File.READ) != OK:
-		slot_torso.texture = Items.armors["torso1"]
-		slot_hands.texture = Items.armors["hands1"]
-		slot_feet.texture = Items.armors["feet1"]
+		slot_torso.texture = Items.armors["torso1"]["icon"]
+		slot_hands.texture = Items.armors["hands1"]["icon"]
+		slot_feet.texture = Items.armors["feet1"]["icon"]
 
 		slot_mainhand.texture = null
 		slot_offhand.texture = null
@@ -189,12 +350,10 @@ func loadData() -> void:
 	var data = file.get_var()
 	file.close()
 
-	# corrupted save
-
 	if typeof(data) != TYPE_DICTIONARY:
-		slot_torso.texture = Items.armors["torso1"]
-		slot_hands.texture = Items.armors["hands1"]
-		slot_feet.texture = Items.armors["feet1"]
+		slot_torso.texture = Items.armors["torso1"]["icon"]
+		slot_hands.texture = Items.armors["hands1"]["icon"]
+		slot_feet.texture = Items.armors["feet1"]["icon"]
 
 		slot_mainhand.texture = null
 		slot_offhand.texture = null
@@ -212,6 +371,7 @@ func loadData() -> void:
 	_load_texture(slot_offhand, data.get("OffHand", ""))
 
 	updateEquipment()
+	get_equipment_stats()
 
 
 func _get_texture_path(slot: TextureRect) -> String:
@@ -224,6 +384,21 @@ func _get_texture_path(slot: TextureRect) -> String:
 	return slot.texture.resource_path
 
 
+func setUnshaded(node: Node) -> void:
+	if node is MeshInstance:
+		if node.material_override:
+			if node.material_override is SpatialMaterial:
+				node.material_override.flags_unshaded = true
+
+		for i in range(node.get_surface_material_count()):
+			var mat = node.get_surface_material(i)
+
+			if mat and mat is SpatialMaterial:
+				mat.flags_unshaded = true
+
+	for child in node.get_children():
+		setUnshaded(child)
+		
 func _load_texture(slot: TextureRect, texture_path: String) -> void:
 	if !slot:
 		return

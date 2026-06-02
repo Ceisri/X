@@ -88,62 +88,53 @@ func get_drag_data(position: Vector2):
 	displayQuantity()
 	return data
 
-
 func can_drop_data(position, data):
 	if typeof(data) != TYPE_DICTIONARY:
-		print("can_drop_data: invalid data type")
 		return false
 
-	if not data.has("type"):
-		print("can_drop_data: missing type key")
+	if !data.has("type"):
 		return false
 
-	if icon:
-		data["target_texture"] = icon.texture
-	data["target_quantity"] = quantity
+	if data.get("type") == "skill":
+		return false
 
-	return data.get("type", "") != "skill"
+	return true
 
 
 func drop_data(position, data):
 	if typeof(data) != TYPE_DICTIONARY:
-		print("drop_data: invalid data")
 		return
 
-	if not data.has("origin_node"):
-		print("drop_data: missing origin_node")
+	if !data.has("origin_node"):
 		return
 
 	var origin_node = data["origin_node"]
-	if not is_instance_valid(origin_node):
-		print("drop_data: origin_node is invalid")
+	if !is_instance_valid(origin_node):
+		return
+
+	# -------------------------
+	# CRITICAL FIX: prevent self-drop corruption
+	# -------------------------
+	if origin_node == self:
 		return
 
 	var origin_icon = origin_node.get_node_or_null("Slot")
-	if not origin_icon:
-		print("drop_data: origin_slot missing Slot node")
+	if !origin_icon:
 		return
-
-	var dragPreview = origin_node.get_node_or_null("Sprite")
-	if dragPreview:
-		dragPreview.queue_free()
 
 	var origin_texture = data.get("origin_texture", null)
 	var origin_quantity = data.get("origin_quantity", 0)
 	var origin_stackable = data.get("origin_stackable", false)
-	var origin_max_quantity = data.get("origin_max_quantity", 0)
 
 	if origin_texture == null:
-		print("drop_data: origin_texture is null")
 		return
 
 	var target_texture = icon.texture if icon else null
 
-	if (
-		origin_texture == target_texture
-		and stackable
-		and origin_stackable
-	):
+	# -------------------------
+	# STACKING
+	# -------------------------
+	if origin_texture == target_texture and stackable and origin_stackable:
 		var total = quantity + origin_quantity
 
 		if total <= max_quantity:
@@ -151,26 +142,30 @@ func drop_data(position, data):
 			origin_node.quantity = 0
 			origin_icon.texture = null
 		else:
+			var remaining = total - max_quantity
 			quantity = max_quantity
-			origin_node.quantity = total - max_quantity
+			origin_node.quantity = remaining
+
+	# -------------------------
+	# SWAP
+	# -------------------------
 	else:
-		if origin_icon:
-			origin_icon.texture = target_texture
 		if icon:
 			icon.texture = origin_texture
+		if origin_icon:
+			origin_icon.texture = target_texture
 
-		origin_node.quantity = data.get("target_quantity", quantity)
+		var temp_qty = quantity
 		quantity = origin_quantity
+		origin_node.quantity = temp_qty
 
-		origin_node.stackable = data.get("target_stackable", stackable)
+		var temp_stack = stackable
 		stackable = origin_stackable
-
-		origin_node.max_quantity = data.get("target_max_quantity", max_quantity)
-		max_quantity = origin_max_quantity
+		origin_node.stackable = temp_stack
 
 	displayQuantity()
 
-	if origin_node and origin_node.has_method("displayQuantity"):
+	if origin_node.has_method("displayQuantity"):
 		origin_node.displayQuantity()
 
 	if inventory and inventory.has_method("saveData"):

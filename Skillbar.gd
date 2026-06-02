@@ -1,6 +1,7 @@
 extends Control
 
 onready var player = $"../.."
+onready var character_ui = $"../Menu/CharacterBar"
 onready var animationcalls = $"../../AnimationCalls"
 onready var grid = $GridContainer
 onready var expand_button = $ExpandCollapse
@@ -46,7 +47,6 @@ func expandCollapse()->void:
 		expand_state = 0
 	applyExpandState()
 	saveKeybinds()
-	saveCooldowns()
 
 
 
@@ -73,10 +73,21 @@ func skills(slot)->void:
 			if skill_tree.skills[skill] <= 0:
 				return
 
+			# Check energy cost
+			var energy_cost = PlayerSkills.getEnergyCost(skill)
+
+			if energy_cost > 0:
+				if player.stats.energy < energy_cost:
+					return # Not enough energy
+
+				player.stats.energy -= energy_cost
+				character_ui.updateBars()
+				
 			animationcalls.unlockAnim()
 			player.anim_locks[skill] = true
-			active_cooldowns[path] = PlayerSkills.getCooldown(path)
-			saveCooldowns()
+			var cooldown = PlayerSkills.getCooldown(path)
+			cooldown /= max(0.01,player.stats.derived_stats["cooldown_reduction"])
+			active_cooldowns[path] = cooldown
 			return
 func updateCooldowns(delta)->void:
 	for button in grid.get_children():
@@ -93,7 +104,7 @@ func updateCooldowns(delta)->void:
 			if cd <= 0:
 				active_cooldowns.erase(path)
 				slot.get_node("CD").text = ""
-				saveCooldowns()
+
 		else:
 			slot.get_node("CD").text = ""
 func matchInputSlot()->void:
@@ -229,7 +240,7 @@ func getSlotIndex(slot)->int:
 		if button.get_node("Slot") == slot:
 			return i
 	return -1
-func saveCooldowns()->void:
+func saveData()->void:
 	var savePath = "user://save/" + player.save_id + "/skill_cooldowns.save"
 	var dir = Directory.new()
 	if !dir.dir_exists("user://save"):

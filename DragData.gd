@@ -36,81 +36,153 @@ func get_drag_data(position: Vector2):
 	
 
 func can_drop_data(position, data):
-	var target_slot = get_parent().get_name()
+	if data == null:
+		print("Drop rejected: data is null")
+		return false
+
+	if !data.has("origin_node"):
+		print("Drop rejected: missing origin_node")
+		return false
+
+	if !data.has("origin_texture"):
+		print("Drop rejected: missing origin_texture")
+		return false
+
 	data["target_texture"] = icon.texture
 	data["target_quantity"] = quantity
 	data["target_item"] = item
 
 	return true
-func drop_data(position,data):
+
+
+func drop_data(position, data):
+
+	if data == null:
+		print("Drop failed: data is null")
+		return
 
 	if !data.has("origin_texture"):
+		print("Drop failed: missing origin_texture")
 		return
 
 	if !data.has("origin_node"):
+		print("Drop failed: missing origin_node")
+		return
+
+	var origin_node = data["origin_node"]
+
+	if origin_node == null:
+		print("Drop failed: origin_node is null")
+		return
+
+	if !is_instance_valid(origin_node):
+		print("Drop failed: origin_node is invalid")
 		return
 
 	var origin_texture = data["origin_texture"]
+
+	if origin_texture == null:
+		print("Drop failed: origin_texture is null")
+		return
+
 	var target_texture = icon.texture
 
 	var origin_quantity = 1
 
 	if data.has("origin_quantity"):
-		origin_quantity = data["origin_quantity"]
-
-	var origin_node = data["origin_node"]
-
-	if origin_node == null:
-		return
+		origin_quantity = int(data["origin_quantity"])
 
 	var origin_icon = origin_node.get_node_or_null("Slot")
 
 	if origin_icon == null:
+		print("Drop failed: origin Slot node missing")
 		return
 
-	icon.texture = origin_texture
+	if !is_instance_valid(origin_icon):
+		print("Drop failed: origin Slot node invalid")
+		return
 
+	var source_is_skill_tree = false
+
+	if "is_from_skill_tree" in origin_node:
+		source_is_skill_tree = origin_node.is_from_skill_tree
+
+	# Same texture dropped onto same slot
 	if origin_texture == target_texture:
 
-		if has_method("set"):
-			quantity += origin_quantity
+		if source_is_skill_tree:
+			print("Ignored duplicate skill-tree drop")
+			return
 
-		if origin_node.has_method("set"):
+		quantity += origin_quantity
+
+		if "quantity" in origin_node:
 			origin_node.quantity = 0
+
+		if "item" in origin_node:
 			origin_node.item = "null"
 
 		origin_icon.texture = null
 
 		if origin_icon.has_node("CD"):
-			origin_icon.get_node("CD").text = ""
+			var cd = origin_icon.get_node_or_null("CD")
+			if cd:
+				cd.text = ""
 
-	else:
-		
+		return
 
-		if origin_node.is_from_skill_tree == false:
+	# Skill tree -> skill bar = copy
+	if source_is_skill_tree:
 
-			var temp_quantity = quantity
+		icon.texture = origin_texture
 
-			quantity = origin_quantity
+		if data.has("origin_item"):
+			item = data["origin_item"]
 
-			if origin_node.has_method("set"):
-				origin_node.quantity = temp_quantity
+		if data.has("type"):
+			type = data["type"]
 
-			origin_icon.texture = target_texture
+		print("Skill copied from skill tree")
+		return
 
-			if origin_icon.texture == null:
+	# Inventory/skillbar swap
+	var temp_texture = icon.texture
+	var temp_quantity = quantity
+	var temp_item = item
 
-				if origin_node.has_method("set"):
-					origin_node.quantity = 0
-					origin_node.item = "null"
+	icon.texture = origin_texture
+	quantity = origin_quantity
 
-				if origin_icon.has_node("CD"):
-					origin_icon.get_node("CD").text = ""
+	if data.has("origin_item"):
+		item = data["origin_item"]
 
-			if icon.texture == null:
+	origin_icon.texture = temp_texture
 
-				quantity = 0
-				item = "null"
+	if "quantity" in origin_node:
+		origin_node.quantity = temp_quantity
 
-				if icon.has_node("CD"):
-					icon.get_node("CD").text = ""
+	if "item" in origin_node:
+		origin_node.item = temp_item
+
+	if origin_icon.texture == null:
+
+		if "quantity" in origin_node:
+			origin_node.quantity = 0
+
+		if "item" in origin_node:
+			origin_node.item = "null"
+
+		if origin_icon.has_node("CD"):
+			var cd = origin_icon.get_node_or_null("CD")
+			if cd:
+				cd.text = ""
+
+	if icon.texture == null:
+
+		quantity = 0
+		item = "null"
+
+		if icon.has_node("CD"):
+			var cd = icon.get_node_or_null("CD")
+			if cd:
+				cd.text = ""

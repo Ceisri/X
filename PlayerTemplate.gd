@@ -12,7 +12,7 @@ onready var loot = $UI/Loot
 var save_id = "player"
 var entity_name = "Victor"
 
-export var gravity = 9.8
+export var gravity = 9.8 
 export var jump_force = 9
 export var walk_speed = 6
 export var run_speed = 18
@@ -25,54 +25,47 @@ var aim_turn = float()
 var movement = Vector3()
 var vertical_velocity = Vector3()
 var movement_speed = int()
-var angular_acceleration = int()
+var angular_acceleration:int = 5
 var acceleration = int()
 var can_move= true
 
+var cursor_visible = false
 
-var anim_locks = {
-	"cleave":false,
-	"battlecry":false,
-	"dodge":false,
+func _ready(): # Camera based Rotation
+	for child in $UI/Skillbar/GridContainer.get_children():
+		child.get_node("Slot").player = self
+		child.parent = self 
+		child.get_node("Slot").loadData()
+	direction = Vector3.BACK.rotated(Vector3.UP, $Camroot/h.global_transform.basis.get_euler().y)
 	
-	"dash":false,
-	"jump":false,
-	"stop_run":false,
-	"parry":false,
-	"sit":false,
-	"stop_sit":false,
-	"scream":false,
-	"die":false,
-	"prepare":false,
-	"staggered":false}
-
-
-
 func _physics_process(delta):
+	if cursor_visible == false:
+		combatInputs()
+		jump()
+		movement(delta)
+		dash()
+		
 	if !movement_mode == "idle":
 		loot.closeLoot()
 	animationOrder()
-	jump()
-	movement(delta)
-	dig()
-	attack()
-	dash()
+	
+	
+	
+	if Input.is_action_just_pressed("entity_debug"):
+		$UI/CrossairInspect/Debug.visible = !$UI/CrossairInspect/Debug.visible 
 	if Input.is_action_just_pressed("character"):
 		equipment.visible = !equipment.visible
-		stats.health -= 10
-		stats.arcane -= 4
-	if Engine.get_physics_frames() % 4000 == 0:
-		saveInventoryData()
 	if Engine.get_physics_frames() % 3 == 0:
 		equipment.updateEquipment()
-		$UI.crossairInspect(self)
+	if Engine.get_physics_frames() % 60 == 0:
+		$UI/CrossairInspect.crossairInspect(self)
+		$UI/Menu/CharacterBar.updateBars()
+		stats.health = stats.regenerate(stats.derived_stats["health_regeneration"],stats.health,stats.max_health)
 	if Engine.get_physics_frames() % 120 == 0:
 		equipment.updateEquipment()
-	mouseMode()
 	var on_floor = is_on_floor() # State control for is jumping/falling/landing
 	
 	movement_speed = 0
-	angular_acceleration = 10
 	acceleration = 15
 
 	if not is_on_floor(): vertical_velocity += Vector3.DOWN * gravity * 2 * delta
@@ -83,7 +76,21 @@ var moving:bool = false
 var movement_mode:String = "idle"
 var previous_movement_mode:String = "idle"
 
+var effective_turn_speed:float 
 func movement(delta)->void:
+	effective_turn_speed = base_turn_speed
+
+	# slow during attack
+	if anim_locks["base_atk"]:
+		if is_dashing:
+			effective_turn_speed *= dash_turn_multiplier
+		else:
+			effective_turn_speed *= 0.3
+
+	# faster during dash (scaled by power)
+	if is_dashing:
+		effective_turn_speed *= dash_turn_multiplier
+		
 	previous_movement_mode = movement_mode
 	movement_mode = "idle"
 
@@ -109,13 +116,20 @@ func movement(delta)->void:
 			break
 
 	var h_rot = camera_v.global_transform.basis.get_euler().y
+
 	movement_speed = 0
 	moving = false
 
+
+	# ----------------------------
+	if movement_input:
+		direction = input_direction.rotated(Vector3.UP, h_rot).normalized()
+	else:
+		if !locked:
+			direction = Vector3.ZERO
+
 	if !locked:
 		if movement_input:
-			direction = input_direction.rotated(Vector3.UP,h_rot).normalized()
-
 			moving = true
 			movement_mode = "walk"
 
@@ -134,26 +148,132 @@ func movement(delta)->void:
 			moving = false
 			movement_mode = "idle"
 			direction = Vector3.ZERO
-
-		if Input.is_action_pressed("aim"):
-			player_mesh.rotation.y = lerp_angle(player_mesh.rotation.y,$Camroot/h.rotation.y,delta * angular_acceleration)
-		elif direction != Vector3.ZERO:
-			player_mesh.rotation.y = lerp_angle(player_mesh.rotation.y,atan2(direction.x,direction.z) - rotation.y,delta * angular_acceleration)
 	else:
 		moving = false
 		movement_mode = "idle"
-		direction = Vector3.ZERO
+		movement_speed = 0
 
-	horizontal_velocity = horizontal_velocity.linear_interpolate(direction.normalized() * movement_speed,acceleration * delta)
+	# ----------------------------
+	# ROTATION (uses updated direction)
+	# ----------------------------
+	if anim_locks["base_atk"] or !locked:
+		if Input.is_action_pressed("aim"):
+			player_mesh.rotation.y = lerp_angle(
+				player_mesh.rotation.y,
+				$Camroot/h.rotation.y,
+				delta * effective_turn_speed
+			)
+		elif direction != Vector3.ZERO:
+			player_mesh.rotation.y = lerp_angle(
+				player_mesh.rotation.y,
+				atan2(direction.x, direction.z) - rotation.y,
+				delta * effective_turn_speed
+			)
+			$Area.rotation.y = player_mesh.rotation.y
+
+	physics(delta)
+
+
+
+var is_dashing:bool = false
+var dash_timer:float = 0.0
+var dash_duration:float = 0.3
+var dash_velocity:Vector3 = Vector3.ZERO
+var dash_falloff:float = 12.0
+var dash_current_speed:float = 0.0
+var dash_max_power:float = 50.0
+var dash_accel:float = 10.0
+var dash_start_delay:float = 0.06
+var dash_time:float = 0.0
+
+var dash_phase:int = 0
+# 0 = startup (10%)
+# 1 = delay
+# 2 = acceleration
+var base_turn_speed:float = 4.4
+var dash_turn_multiplier:float = 10
+var dash_start_speed:float = 0.0
+func propulsion(power):
+	# Get the direction the mesh is looking
+	direction = player_mesh.global_transform.basis.z
+	direction.y = 0
+	direction = direction.normalized()
+
+	is_dashing = true
+	dash_timer = dash_duration
+	dash_time = 0.0
+
+	dash_max_power = power
+
+	dash_phase = 0
+	dash_start_speed = power * 0.1
+	dash_current_speed = dash_start_speed
+
+	# TURN SPEED BOOST BASED ON POWER
+	dash_turn_multiplier = 1.0 + (power / dash_power) * 1.5
+
+
+
+
+func physics(delta)->void:
+
+	if is_dashing:
+
+		dash_time += delta
+		dash_timer -= delta
+
+		var dash_dir = direction.normalized()
+
+		# -------------------------
+		# PHASE 0: STARTUP (10%)
+		# -------------------------
+		if dash_phase == 0:
+			dash_current_speed = dash_start_speed
+
+			if dash_time >= dash_start_delay:
+				dash_phase = 1
+				dash_time = 0.0
+
+		# -------------------------
+		# PHASE 1: SHORT DELAY (hold speed)
+		# -------------------------
+		elif dash_phase == 1:
+			dash_current_speed = dash_start_speed
+
+			if dash_time >= 0.05:
+				dash_phase = 2
+				dash_time = 0.0
+
+		# -------------------------
+		# PHASE 2: FAST ACCELERATION TO FULL POWER
+		# -------------------------
+		elif dash_phase == 2:
+			dash_current_speed = lerp(
+				dash_current_speed,
+				dash_max_power,
+				12.0 * delta
+			)
+
+		# apply movement
+		horizontal_velocity = dash_dir * dash_current_speed
+
+		if dash_timer <= 0.0:
+			is_dashing = false
+			dash_phase = 0
+			dash_turn_multiplier = 1.0
+
+	else:
+		horizontal_velocity = horizontal_velocity.linear_interpolate(
+			direction.normalized() * movement_speed,
+			acceleration * delta
+		)
 
 	movement.z = horizontal_velocity.z + vertical_velocity.z
 	movement.x = horizontal_velocity.x + vertical_velocity.x
 	movement.y = vertical_velocity.y
 
-	move_and_slide(movement,Vector3.UP)
-
-
-
+	move_and_slide(movement, Vector3.UP)
+	
 var last_dash_input = ""
 var last_dash_time = 0.0
 var dash_double_press_time = 0.25
@@ -183,6 +303,7 @@ func dash()->void:
 		
 		anim_locks["dodge"] = true
 		propulsion(dash_power)
+		guarding =false
 
 		last_dash_input = ""
 		last_dash_time = 0
@@ -192,142 +313,106 @@ func dash()->void:
 		last_dash_time = time
 
 
-func propulsion(power):
-	horizontal_velocity = direction * power
+var weapons:String = "none"
+var anim_locks = {
+	"base_atk":false,
+	"block":false,
+	"block_react":false,
+	"dodge":false,
+	"cleave":false,
+	"cleave_con":false,
+	"battlecry":false,
+	"dash":false,
+	"jump":false,
+	"stop_run":false,
+	"parry":false,
+	"sit":false,
+	"stop_sit":false,
+	"scream":false,
+	"die":false,
+	"prepare":false,
+	"staggered":false}
+func unlockAnim():
+	for key in anim_locks:
+		anim_locks[key] = false
+	current_skill = ""
 
 
 
+var guarding:bool = false
+func combatInputs()->void:
+	if Input.is_action_pressed("rclick"):
+		unlockAnim()
+		guarding =true
+	elif Input.is_action_pressed("click"):
+		guarding = false
+		anim_locks["base_atk"] =true
+	else:
+		guarding = false
 
-
+var can_cleav_cont:bool = false
 
 
 var blend = 0.125
-func animationOrder()->void:
-	for anim_name in anim_locks.keys():
-		if anim_locks[anim_name]:
-			if animation.current_animation != anim_name:
-				if animation.has_animation(anim_name):
-					animation.play(anim_name,blend)
-				else:
-					print("Missing animation: ",anim_name)
-					animation.play("land",blend)
-			return
+
+var anim_lock_exceptions = {
+	"cleave": "cleave_1h",
+	"cleave_con": "cleave_continue_1h",
+}
+var current_skill = ""
+
+func animationOrder() -> void:
+	var attack_speed = stats.derived_stats["attack_speed"]
 	if !is_on_floor():
-		animation.play("fall",blend)
-	elif moving:
-		if movement_mode == "run":
-			animation.play("run_cycle",0,stats.agility)
-		elif movement_mode == "walk":
-			animation.play("walk_cycle")
+		animation.play("idle_fall", blend)
 	else:
-		animation.play("idle_cycle",blend)
+		if anim_locks["dodge"] == true:
+			animation.play("slide", blend)	
+		elif anim_locks["block_react"] == true:
+			animation.play("block_react", blend)
+		elif anim_locks["cleave"] == true:
+			current_skill = "cleave"
+			match weapons:
+				"none":
+					animation.play("Tpose", blend)
+				"two handed":
+					animation.play("cleave_2h", blend,attack_speed)
+				"one handed":
+					animation.play("cleave_1h", blend,attack_speed)
+		elif anim_locks["battlecry"]:
+			current_skill = "battlecry"
+			animation.play("battlecry", blend)
+		elif guarding == true:
+			animation.play("idle_block", blend)
+			current_skill = "block"
+		elif anim_locks["base_atk"] == true:
+			current_skill = "base_atk"
+			match weapons:
+				"none":
+					animation.play("Tpose", blend)
+				"two handed":
+					animation.play("cleave_2h", blend,attack_speed)
+				"one handed":
+					animation.play("cleave_1h", blend,attack_speed)
 		
-		
-		
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+		elif moving:
+			current_skill = "none"
+			if movement_mode == "run":
+				camroot.updateCameraRunShake(get_physics_process_delta_time())
+				animation.play("run_cycle", 0, stats.agility)
+			elif movement_mode == "walk":
+				animation.play("walk_cycle")
+		else:
+			animation.play("idle_cycle", blend)
+			current_skill = "none"
 
 
 func jump()->void:
 	if Input.is_action_just_pressed("jump") and is_on_floor():
 		vertical_velocity = Vector3.UP * jump_force
+		unlockAnim()
 		anim_locks["jump"] = true
-
-
-
-
-
-
-
-
-
-
-
-
-onready var ray = $Camroot/h/v/Camera/RayCast
-func attack():
-	if Input.is_action_just_pressed("click"):
-		if ray.is_colliding():
-			var body = ray.get_collider()
-			if body.is_in_group("Entity") and body != self:
-				body.getHit(self,7)
-				body.anim_locks["staggered"] = true
-				body.stats.nutrition -= 10 
-func dig():
-	var cut = $Camroot/h/v/Camera/RayCast/cut
-	if Input.is_action_just_pressed("rclick") and ray.is_colliding():
-		var hit_pos = ray.get_collision_point()
-		var normal = ray.get_collision_normal()
-		var body = ray.get_collider()
-		if body is CSGMesh:
-			var instance = cut.duplicate()
-			body.sub.add_child(instance)
-			instance.visible = true
-			instance.scale = cut.scale/body.scale
-			instance.material = body.material
-			instance.global_transform.origin = hit_pos-normal*cut.width*cut.scale.x*0.5
-			instance.look_at(hit_pos+normal,Vector3.UP)
-
-func getHit(attacker: Node, damage: float) -> void:
-	stats.health -= damage
-func saveInventoryData():
-	# Call savedata() function on each child of inventory_grid that belongs to the group "Inventory"
-	for child in $UI/Skillbar/GridContainer.get_children():
-		if child.get_node("Slot").has_method("saveData"):
-				child.get_node("Slot").saveData()
-				
-
-
-func _ready(): # Camera based Rotation
-	for child in $UI/Skillbar/GridContainer.get_children():
-		child.get_node("Slot").player = self
-		child.parent = self 
-		child.get_node("Slot").loadData()
-	direction = Vector3.BACK.rotated(Vector3.UP, $Camroot/h.global_transform.basis.get_euler().y)
-	
-func _input(event): # All major mouse and button input events
-	if event is InputEventMouseMotion:
-		aim_turn = -event.relative.x * 0.015 # animates player with mouse movement while aiming 
-	
-#	if event.is_action_pressed("aim"): # Aim button triggers a strafe walk and camera mechanic
-#		direction = $Camroot/h.global_transform.basis.z
-	if event.is_action_pressed("attack"):
-		attack()
-
 		
-var cursor_visible = false
-func mouseMode()-> void:
-	if Input.is_action_just_pressed("ESC"):	# Toggle mouse mode
-		cursor_visible =!cursor_visible
-	if !cursor_visible:
-		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
-	else:
-		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+		guarding =false
+
+

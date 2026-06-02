@@ -2,8 +2,11 @@ extends Control
 
 onready var player = $"../.."
 onready var stats = $"../../Stats"
-onready var close_button = $Close
-onready var combine_button = $Combine
+onready var close_button:TextureButton = $Close
+onready var combine_button:TextureButton = $Combine
+onready var split_button:TextureButton = $Split
+onready var order_button:TextureButton = $Order
+onready var combine_selected_button:TextureButton = $CombineSelected
 onready var debug_give_me_items = $DebugGiveMeItems
 onready var inventory_grid = $ScrollContainer/GridContainer
 
@@ -23,48 +26,47 @@ func _physics_process(delta):
 func _ready()->void:
 	close_button.connect("pressed",self,"collapse")
 	combine_button.connect("pressed",self,"combine")
+	split_button.connect("pressed",self,"splitSelectedSlot")
+	order_button.connect("pressed",self,"orderSlots")
+	combine_selected_button.connect("pressed",self,"combineSelectedSlot")
+	
 	debug_give_me_items.connect("pressed",self,"getRandItems")
 
 	setupInventorySlots()
 	loadData()
 	updateInventory()
+func isArmor(texture)->bool:
+	for key in Items.armors:
+		if texture == Items.armors[key]["icon"]:
+			return true
+	return false
+
+
 func combine()->void:
 	var slots = inventory_grid.get_children()
-
 	for i in range(slots.size()):
 		var slot_a = slots[i]
 		var texture_a = slot_a.get_node("Slot").texture
-
 		if texture_a == null:
 			continue
-
-		if texture_a in Items.armors.values():
+		if isArmor(texture_a):
 			continue
-
 		for j in range(i + 1, slots.size()):
 			var slot_b = slots[j]
 			var texture_b = slot_b.get_node("Slot").texture
-
 			if texture_b == null:
 				continue
-
-			if texture_b in Items.armors.values():
+			if isArmor(texture_b):
 				continue
-
 			if texture_a != texture_b:
 				continue
-
 			var max_quantity = max(slot_a.max_quantity, 9999999999)
 			var space_left = max_quantity - slot_a.quantity
-
 			if space_left <= 0:
 				break
-
 			var amount_to_move = min(space_left, slot_b.quantity)
-
 			slot_a.stackable = true
 			slot_b.stackable = true
-
 			slot_a.quantity += amount_to_move
 			slot_b.quantity -= amount_to_move
 
@@ -80,6 +82,54 @@ func combine()->void:
 
 
 
+var selected_slot:TextureButton = null
+onready var debug:Label = $Selected
+func splitSelectedSlot()->void:
+	if selected_slot != null:
+		var selected_icon = selected_slot.get_node("Slot")
+		if selected_icon.texture != null:
+			var original_quantity = selected_slot.quantity
+			if original_quantity > 1:
+				for child in inventory_grid.get_children():
+						var icon = child.get_node("Slot")
+						if icon.texture == null:
+							icon.texture = selected_icon.texture
+							child.quantity += original_quantity / 2
+							var new_quantity = original_quantity / 2  # Calculate the new quantity
+							selected_slot.quantity = original_quantity - new_quantity  # Update the quantity of the first slot
+							updateInventory()
+							break
+
+func combineSelectedSlot()->void:
+	if selected_slot != null:
+		var selected_icon = selected_slot.get_node("Slot")
+		if selected_icon.texture != null:
+			for child in inventory_grid.get_children():
+				if child != selected_slot:
+					var icon = child.get_node("Slot")
+					if icon.texture == selected_icon.texture:
+						selected_slot.quantity += child.quantity  # Add the quantities
+						child.quantity = 0  # Reset the quantity of the combined slot
+						icon.texture = null  # Clear the texture of the combined slot
+						updateInventory()
+func orderSlots() -> void:
+	var slots_with_texture = []
+	var slots_without_texture = []
+	# Separate slots based on their icon texture
+	for child in inventory_grid.get_children():
+		var icon_texture = child.get_node("Slot").texture
+		if icon_texture != null:
+			slots_with_texture.append(child)
+		else:
+			slots_without_texture.append(child)
+	# Reorder slots so that slots with texture come first
+	var ordered_slots = []
+	ordered_slots += slots_with_texture
+	ordered_slots += slots_without_texture
+	# Reposition the slots in the inventory_grid
+	for i in range(ordered_slots.size()):
+		var slot = ordered_slots[i]
+		inventory_grid.move_child(slot, i)
 func updateInventory()->void:
 	for child in inventory_grid.get_children():
 		child.displayQuantity()
@@ -123,7 +173,8 @@ func _on_inventory_slot_pressed(index):
 
 		useItem(index)
 		return
-
+	selected_slot = inventory_grid.get_node("InventorySlot" + str(index))
+	showSlotDebug(inventory_grid.get_node("InventorySlot" + str(index))) 
 	last_pressed_index = index
 	last_press_time = current_time
 	updateInventory()
@@ -138,13 +189,13 @@ func useItem(index):
 		return
 
 	var potion_flasks = [
-		Items.flasks["energy"],
-		Items.flasks["medicine"],
-		Items.flasks["poison"],
-		Items.flasks["power"]
+		Items.flasks["energy"]["icon"],
+		Items.flasks["medicine"]["icon"],
+		Items.flasks["poison"]["icon"],
+		Items.flasks["power"]["icon"]
 	]
 
-	if texture == Items.flasks["medicine"]:
+	if texture == Items.flasks["medicine"]["icon"]:
 		stats.health += 10
 
 	if texture in potion_flasks:
@@ -154,10 +205,10 @@ func useItem(index):
 			button.quantity = 0
 			slot.texture = null
 
-		CommonBehaviours.addStackableItem(inventory_grid,Items.flasks["empty"],1)
+		CommonBehaviours.addStackableItem(inventory_grid, Items.flasks["empty"])
+
 	button.displayQuantity()
 	updateInventory()
-
 func clearSlot(index):
 	var button = inventory_grid.get_node("InventorySlot" + str(index))
 	var slot = button.get_node("Slot")
@@ -212,13 +263,11 @@ func loadData():
 
 		if data.has("max_inventory_slots"):
 			max_inventory_slots = data["max_inventory_slots"]
-
 		if data.has("slots"):
 			for child in inventory_grid.get_children():
 				if data["slots"].has(child.name):
 					var slot = child.get_node("Slot")
 					var slot_data = data["slots"][child.name]
-
 					child.quantity = slot_data.get("quantity", 0)
 					child.stackable = slot_data.get("stackable", false)
 					child.max_quantity = slot_data.get("max_quantity", 9999999999)
@@ -229,7 +278,6 @@ func loadData():
 						slot.texture = load(slot_data["texture"])
 					else:
 						slot.texture = null
-
 		file.close()
 
 func collapse()->void:
@@ -244,6 +292,8 @@ func getRandItems()->void:
 	CommonBehaviours.addNotStackableItem(inventory_grid,Items.armors["torso2"])
 	CommonBehaviours.addNotStackableItem(inventory_grid,Items.armors["torso1"])
 	CommonBehaviours.addNotStackableItem(inventory_grid,Items.armors["feet1"])
+	CommonBehaviours.addNotStackableItem(inventory_grid,Items.weapons["sword"])
+	CommonBehaviours.addNotStackableItem(inventory_grid,Items.weapons["fork"])
 	CommonBehaviours.addNotStackableItem(inventory_grid,Items.armors["hands1"])
 	CommonBehaviours.addNotStackableItem(inventory_grid,Items.armors["hands2"])
 	CommonBehaviours.addStackableItem(inventory_grid,Items.flasks["energy"],5)
@@ -254,9 +304,25 @@ func getRandItems()->void:
 	CommonBehaviours.addStackableItem(inventory_grid,Items.flasks["power"],5)
 
 	updateInventory()
-
 func _on_inventory_slot_mouse_entered(index):
 	updateInventory()
 
 func _on_inventory_slot_mouse_exited(index):
 	updateInventory()
+
+
+
+func showSlotDebug(slot):
+	if slot == null:
+		debug.text = "null slot"
+		return
+
+	var icon = slot.get_node("Slot")
+
+	var item_name = "empty"
+	var qty = slot.quantity
+
+	if icon.texture != null:
+		item_name = icon.texture.resource_path.get_file().get_basename()
+
+	debug.text = str(slot) + " | " + item_name + " x" + str(qty)
