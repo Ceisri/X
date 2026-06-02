@@ -2,7 +2,7 @@ extends KinematicBody
 
 onready var stats = $Stats
 onready var combat = $Combat
-onready var behaviour =$NPCBehaviour
+
 onready var ray_forward =$RayForward
 onready var ray_left = $RayFrontLeft
 onready var ray_right = $RayFrontRight
@@ -22,6 +22,10 @@ var wander_target = Vector3.ZERO
 onready var nav = get_parent().get_node("Terrain")
 
 
+var is_propelled:bool = false
+var propulsion_timer:float = 0.0
+var propulsion_duration:float = 0.25
+var propulsion_velocity:Vector3 = Vector3.ZERO
 var is_walking:bool = true
 var is_running:bool = false
 var is_sitting:bool = false
@@ -65,7 +69,18 @@ func _physics_process(delta):
 	if Engine.get_physics_frames() % 2 == 0:
 		CommonBehaviours.gravity(self)
 		switchState()
+func propulsion(power:float)->void:
+	if !has_meta("dir"):
+		return
 
+	is_propelled = true
+	propulsion_timer = propulsion_duration
+
+	var dir = get_meta("dir")
+	if dir == Vector3.ZERO:
+		return
+
+	propulsion_velocity = dir.normalized() * power
 
 func ignoreMobBodies():
 	for body in get_tree().get_nodes_in_group("Entity"):
@@ -132,7 +147,7 @@ func wander():
 			rotateMob()
 func sitStateSwitch():
 	if target == null:
-		if animation.has_animation("sit"):
+		if animation.has_animation("sit") and animation.has_animation("idle_sit")and animation.has_animation("stop_sit"):
 			if !get_meta("is_stopped"):
 				return
 			if anim_locks["stop_sit"]:
@@ -155,18 +170,39 @@ func moveforward():
 		if !anim_locks["sit"] or is_sitting == true:
 			if nav_path.size() <= 0:
 				return
+
 			if nav_index >= nav_path.size():
 				nav_path.clear()
 				nav_index = 0
 				return
+
 			var next_pos = nav_path[nav_index]
 			var dir = (next_pos - global_transform.origin)
 			dir.y = 0
+
 			if dir.length() < 1.0:
 				nav_index += 1
 				return
+
 			dir = dir.normalized()
-			set_meta("dir",-dir)
+			set_meta("dir", -dir)
+
+			# -----------------------------
+			# PROPULSION OVERRIDE
+			# -----------------------------
+			if is_propelled:
+				propulsion_timer -= get_physics_process_delta_time()
+
+				move_and_slide(propulsion_velocity)
+
+				if propulsion_timer <= 0.0:
+					is_propelled = false
+
+				return
+
+			# -----------------------------
+			# NORMAL NAV MOVEMENT
+			# -----------------------------
 			if is_running:
 				move_and_slide(-dir * stats.run_speed)
 			elif is_walking:
@@ -267,10 +303,7 @@ func attractPredators():
 func emptyAggro(prey:Node, aggro:float) -> void:
 	var instigatorAggro = get_or_create_aggro_target(prey)
 	instigatorAggro.aggro += aggro
-func getHit(attacker: Node, damage: float) -> void:
-	var instigatorAggro = get_or_create_aggro_target(attacker)
-	instigatorAggro.aggro += damage
-	stats.health -= damage
+	
 func get_or_create_aggro_target(target_entity: Node) -> AggroTarget:
 	for existing_target in targets:
 		if existing_target.target_entity == target_entity:
@@ -287,9 +320,7 @@ func find_highest_aggro_target() -> AggroTarget:
 			target = aggro_target
 			highest_aggro = aggro_target.aggro
 	return target
-onready var tridi_label = $Name2
-func display_aggro_info(aggro_info: Array):
-	tridi_label.text = "\n".join(aggro_info)
+
 func team_aggro():
 	var sorted_targets = targets.duplicate()
 	sorted_targets.sort_custom(self,"sort_aggro_desc")

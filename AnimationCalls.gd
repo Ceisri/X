@@ -2,12 +2,12 @@ extends Node
 
 onready var parent = $".."
 onready var animation = $"../AnimationPlayer"
-onready var tween = $"../Tween"
+
 onready var dmg_area = $"../AreaDamage"
 onready var stats = $"../Stats"
 
 func _ready():
-	pass
+
 	cleanCallTracks()
 	connectUnlockAnimLastFrames()
 	loadAnimations()
@@ -20,71 +20,18 @@ func canMove():
 func unlockAnim():
 	for key in parent.anim_locks:
 		parent.anim_locks[key] = false
+		$"../Combat".skill_lock = false
 	canMove()
 
-func excecutespell()->void:
-	var skill = parent.combat.current_cast_skill
-
-	if skill == "":
-		return
-
-	if !MobSkills.isAttack(skill):
-		return
-
-	var damage = MobSkills.getDamage(skill)
-
-	for body in parent.dmg_area.get_overlapping_bodies():
-		if body == parent:
-			continue
-
-		if body.has_method("getHit"):
-			body.getHit(parent,damage)
-
-			if MobSkills.isStun(skill):
-				# add stun logic here later
-				pass
-
-			if MobSkills.isLifesteal(skill):
-				var heal = damage * MobSkills.getLifestealPower(skill)
-
-				parent.stats.health += heal
-			
-			if MobSkills.isCooldownReduce(skill):
-				var reduction = MobSkills.getCooldownReducePower(skill)
-
-				for cd_skill in parent.combat.active_cooldowns.keys():
-					parent.combat.active_cooldowns[cd_skill] *= (1.0 - reduction)
-
-					if parent.combat.active_cooldowns[cd_skill] <= 0:
-						parent.combat.active_cooldowns.erase(cd_skill)
 
 
-
-func seqUP():#old deprecated, only useful for mobs who's skill system not yet implemented
-	pass
-#	parent.combat.melee_step += 1
-#
-#	if parent.combat.melee_step > 7:
-#		parent.combat.melee_step = 1
 var dash_power = 0.0
 var dash_direction = Vector3.ZERO
 
 
 
-func dashForward(dash_distance:float):
-	dash_power = dash_distance
-	dash_direction = -parent.global_transform.basis.z.normalized()
-
-	tween.stop_all()
-	tween.interpolate_method(self,"updateDash",dash_power,0.0,0.18,Tween.TRANS_CUBIC,Tween.EASE_OUT)
-	tween.start()
-
-func updateDash(power:float):
-	var step = dash_direction * power * get_physics_process_delta_time()
-
-	parent.move_and_collide(step)
-
-	pushTarget(power)
+func dash(power:float):
+	parent.propulsion(power)
 
 func pushTarget(power:float):
 	for body in parent.dmg_area.get_overlapping_bodies():
