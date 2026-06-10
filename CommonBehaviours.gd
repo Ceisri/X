@@ -2,7 +2,7 @@ extends Node
 
 var FloatingResScene: PackedScene = preload("res://world/player/modules/Interface/scenes/FloatingRes.tscn")
 
-func addNotStackableItem(inventory_grid, item_data):
+func addNotStackableItem(inventory_grid, item_data, floating_parent):
 	for child in inventory_grid.get_children():
 		var slot = child.get_node("Slot")
 
@@ -11,48 +11,151 @@ func addNotStackableItem(inventory_grid, item_data):
 			child.stackable = false
 			child.quantity = 1
 			child.max_quantity = 1
+			showFloatingItem(floating_parent, item_data, 1)
 			return
-func addStackableItem(inventory_grid,item_data,quantity:int=1):
+
+
+func addStackableItem(inventory_grid, item_data, floating_parent, quantity:int = 1):
 	for child in inventory_grid.get_children():
 		var slot = child.get_node("Slot")
-
-		if slot.texture == item_data.icon and child.stackable:
+		if slot.texture == item_data["icon"] and child.stackable:
 			child.quantity += quantity
 			return
-
 	for child in inventory_grid.get_children():
 		var slot = child.get_node("Slot")
 
 		if slot.texture == null:
-			slot.texture = item_data.icon
+			slot.texture = item_data["icon"]
 			child.stackable = true
 			child.quantity = quantity
 			child.max_quantity = 9999999999
+
 			return
-func spawn(controller,scene,position = null,mobName = "",nutrition = 100,health = 100,finished = false):
-	var RESPAWN_TIME = 10.0
-	var SPAWN_RANGE = 10.0
+
+func removeItemByTexture(texture, inventory_grid) -> bool:
+	if texture == null:
+		return false
+
+	for child in inventory_grid.get_children():
+		var slot = child.get_node("Slot")
+
+		if slot.texture == texture:
+			child.quantity -= 1
+
+			if child.quantity <= 0:
+				child.quantity = 0
+				slot.texture = null
+
+			if child.has_method("displayQuantity"):
+				child.displayQuantity()
+
+			return true
+
+	return false
+
+func inventoryHasItem(texture, inventory_grid) -> bool:
+	if texture == null:
+		return false
+
+	for child in inventory_grid.get_children():
+		var slot = child.get_node("Slot")
+
+		if slot.texture == texture and child.quantity > 0:
+			return true
+
+	return false
+
+func showFloatingItem(parent_node, item_data, quantity:int = 1):
+	var floating = FloatingResScene.instance()
+
+	floating.text = "+" + str(quantity)
+	floating.icon = item_data["icon"]
+	floating.use_screen_center = false
+	floating.world_position = Vector2.ZERO
+
+	parent_node.add_child(floating)
+
+
+func useItem(button,inventory_grid,stats,floating_text_parent=null)->bool:
+	if button==null:
+		return false
+
+	var slot=button.get_node_or_null("Slot")
+
+	if slot==null and button.get_parent()!=null:
+		slot=button.get_parent().get_node_or_null("Slot")
+
+	if slot==null:
+		return false
+
+	var texture=slot.texture
+
+	if texture==null:
+		return false
+
+	var consumed=false
+
+	if texture==Items.flasks["medicine"]["icon"]:
+		if stats.health>=stats.max_health:
+			return false
+		stats.health=min(stats.health+10,stats.max_health)
+		consumed=true
+
+	elif texture==Items.flasks["energy"]["icon"]:
+		if stats.energy>=stats.max_energy:
+			return false
+		stats.energy=min(stats.energy+10,stats.max_energy)
+		consumed=true
+
+	elif texture==Items.flasks["power"]["icon"]:
+		consumed=true
+
+	elif texture==Items.flasks["poison"]["icon"]:
+		consumed=true
+
+	if !consumed:
+		return false
+
+	addStackableItem(
+		inventory_grid,
+		Items.flasks["empty"],
+		floating_text_parent
+	)
+
+	return true
+
+
+
+func spawn(controller, scene, position=null, mob_name="", nutrition=100, health=-1, finished=false):
 	var mob = scene.instance()
-	if position == null:
-		var offsetX = rand_range(-SPAWN_RANGE,SPAWN_RANGE)
-		var offsetZ = rand_range(-SPAWN_RANGE,SPAWN_RANGE)
-		mob.translation = Vector3(controller.global_transform.origin.x + offsetX,controller.global_transform.origin.y,controller.global_transform.origin.z + offsetZ)
-	else:
-		mob.translation = position
+
+	var spawn_position = position if position != null else Vector3(
+		controller.global_transform.origin.x + rand_range(-10, 10),
+		controller.global_transform.origin.y,
+		controller.global_transform.origin.z + rand_range(-10, 10)
+	)
+
+	mob.translation = spawn_position
+
 	var stats = mob.get_node("Stats")
-	if mobName == "":
-		mobName = stats.Names[randi() % stats.Names.size()]
-	stats.Name = mobName
+
+	if mob_name == "":
+		mob_name = stats.Names[randi() % stats.Names.size()]
+
+	stats.Name = mob_name
 	stats.nutrition = nutrition
-	stats.health = health
+
+	if health == -1:
+		stats.health = stats.max_health
+	else:
+		stats.health = health
+
 	stats.is_finished = finished
-	mob.set_meta("state","wander")
+
+	mob.set_meta("state", "wander")
 	controller.add_child(mob)
+
 	return mob
-
-
-
-
 
 
 

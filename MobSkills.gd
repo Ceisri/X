@@ -1,7 +1,5 @@
 extends Node
 
-
-
 var cooldowns = {
 	"bite.png":0,
 	"claw_srtrike3.png":3,
@@ -227,9 +225,9 @@ func getSpeciesSkills(species):
 func getSkillPath(skill):
 	match skill:
 		"bear.png","bear_red.png","claw.png":
-			return "res://world/interface/assets/icons/mobs/bear/" + skill
+			return "res://world/interface/assets/icons/skills/mobs/bear/" + skill
 
-	return "res://world/interface/assets/icons/mobs/generic/" + skill
+	return "res://world/interface/assets/icons/skills/mobs/generic/" + skill
 
 
 

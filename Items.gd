@@ -1,6 +1,52 @@
 extends Node
 # singleton called Items
 
+
+
+func generateLootForCorpse(corpse):
+	var loot = []
+
+	var weight = corpse.stats.weight
+
+	var bone_amount = 250
+	var meat_amount = int(round(weight * 0.6))
+
+	var meat_key = ""
+
+	match corpse.stats.species.to_lower():
+		"wolf":
+			meat_key = "wolf meat"
+
+		"goat":
+			meat_key = "goat meat"
+
+		"boar":
+			meat_key = "boar meat"
+
+		"moose":
+			meat_key = "moose meat"
+
+		_:
+			meat_key = "wolf meat"
+
+	loot.append({
+		"item_key": meat_key,
+		"quantity": meat_amount
+	})
+
+	loot.append({
+		"item_key": "bone",
+		"quantity": bone_amount
+	})
+
+	return loot
+
+
+
+
+
+
+
 var flasks = {
 	"empty": {
 		"price": 0,
@@ -35,33 +81,33 @@ var flasks = {
 }
 
 var food = {
-	"raw_meat_1": {
+	"boar meat": {
 		"price": 0,
 		"icon": preload("res://world/interface/assets/icons/ProfessionAndCraftIcons/Cooking_fishing/Cooking_34_meat.png"),
 		"rarity": 0.0,
 		"description": "placeholder1"
 	},
-	"raw_meat_2": {
+	"moose meat": {
 		"price": 0,
 		"icon": preload("res://world/interface/assets/icons/ProfessionAndCraftIcons/Cooking_fishing/Cooking_27_meat.png"),
 		"rarity": 0.0,
 		"description": "placeholder2"
 	},
-	"bone": {
+	"wolf meat": {
 		"price": 0,
-		"icon": preload("res://world/interface/assets/icons/ProfessionAndCraftIcons/Cooking_fishing/Cooking_25_bone.png"),
+		"icon": preload("res://world/interface/assets/icons/ProfessionAndCraftIcons/Cooking_fishing/Cooking_23_meat.png"),
 		"rarity": 0.0,
 		"description": "placeholder3"
 	},
-	"raw_meat_3": {
+	"goat meat": {
 		"price": 0,
 		"icon": preload("res://world/interface/assets/icons/ProfessionAndCraftIcons/Cooking_fishing/Cooking_24_meat.png"),
 		"rarity": 0.0,
 		"description": "placeholder4"
 	},
-	"raw_meat_4": {
+	"bone": {
 		"price": 0,
-		"icon": preload("res://world/interface/assets/icons/ProfessionAndCraftIcons/Cooking_fishing/Cooking_23_meat.png"),
+		"icon": preload("res://world/interface/assets/icons/ProfessionAndCraftIcons/Cooking_fishing/Cooking_25_bone.png"),
 		"rarity": 0.0,
 		"description": "placeholder1"
 	}
@@ -144,14 +190,13 @@ var armors = {
 	}
 }
 
-
 var weapons = {
 	"sword": {
 		"price": 0,
 		"icon": preload("res://world/interface/assets/interface_elements/ArrowLittleRight.png"),
 		"rarity": 0.0,
+		"two handed":false,
 		"description": "placeholder1",
-
 		"damages": {
 			"slash": 3,
 			"pierce": 2
@@ -162,13 +207,23 @@ var weapons = {
 		"price": 0,
 		"icon": preload("res://world/interface/assets/interface_elements/ToggleButtonStandart.png"),
 		"rarity": 0.0,
+		"two handed":true,
 		"description": "placeholder2",
-
 		"damages": {
 			"pierce": 66,
 			"slash": 2
 		}
 	},
 
-
+	"shield": {
+		"price": 0,
+		"icon": preload("res://world/interface/assets/icons/equipment/shield_placeholder.png"),
+		"rarity": 0.0,
+		"two handed":false,
+		"description": "placeholder2",
+		"damages": {
+			"pierce": 66,
+			"slash": 2
+		}
+	}
 }
