@@ -110,25 +110,20 @@ func _process(delta):
 
 
 func get_drag_data(position:Vector2):
-	if can_be_dragged == false:
-		return 
-
-	if icon.texture == null:
+	if !can_be_dragged or icon.texture==null:
 		return null
 
-	var preview = TextureRect.new()
-
-	preview.texture = icon.texture
-	preview.rect_size = Vector2(64,64)
-
+	var preview=TextureRect.new()
+	preview.texture=icon.texture
+	preview.rect_size=Vector2(64,64)
 	set_drag_preview(preview)
 
-	var data = {
-		"origin_node": self,
-		"origin_texture": icon.texture
+	return {
+		"origin_node":self,
+		"origin_icon":icon,
+		"origin_texture":icon.texture,
+		"origin_is_from_skill_tree":true
 	}
-
-	return data
 
 
 func can_drop_data(position,data):
@@ -136,4 +131,4 @@ func can_drop_data(position,data):
 
 
 func drop_data(position,data):
-	pass
+	print("DROP EXECUTED")

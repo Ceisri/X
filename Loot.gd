@@ -4,7 +4,7 @@ onready var player = $"../.."
 onready var loot_grid = $ScrollContainer/GridContainer
 onready var loot_slot_holder = $ScrollContainer/GridContainer/LootSlot
 onready var label_debug = $Label
-onready var area = $"../../Area"
+onready var area =  $"../../Turnable/Area"
 onready var close_button = $Close
 
 var current_corpse = null
@@ -17,15 +17,82 @@ func _ready():
 	loadData()
 	hide()
 
-
+var grabbed_corpse = null
+var grabbed_collision_shapes = []
 func _physics_process(delta):
+
 	if Input.is_action_just_pressed("loot"):
 		var corpse = getDeadBodyInArea()
+		updateSlots()
 
 		if corpse:
 			openCorpseLoot(corpse)
 		else:
 			hide()
+
+	if Input.is_action_just_pressed("grab"):
+		if grabbed_corpse:
+			dropCorpse()
+		else:
+			var corpse = getDeadBodyInArea()
+			if corpse:
+				grabCorpse(corpse)
+
+	if grabbed_corpse:
+		updateGrabbedCorpse()
+		
+func grabCorpse(corpse):
+	grabbed_corpse = corpse
+
+	player.is_carrying = true
+	grabbed_corpse.is_being_carried = true
+
+	grabbed_collision_shapes.clear()
+	disableCollisionsRecursive(corpse)
+
+	if corpse is RigidBody:
+		corpse.mode = RigidBody.MODE_KINEMATIC
+		corpse.linear_velocity = Vector3.ZERO
+		corpse.angular_velocity = Vector3.ZERO
+		
+		
+func disableCollisionsRecursive(node):
+	for child in node.get_children():
+
+		if child is CollisionShape:
+			child.disabled = true
+			grabbed_collision_shapes.append(child)
+
+		disableCollisionsRecursive(child)
+func updateGrabbedCorpse():
+	if grabbed_corpse == null:
+		return
+
+	var forward = -player.player_mesh.global_transform.basis.z
+
+	grabbed_corpse.global_transform.origin = player.global_transform.origin + Vector3(0,2.5,0) + forward * 0.5
+	grabbed_corpse.rotation.y = player.player_mesh.rotation.y
+	
+func dropCorpse():
+	if grabbed_corpse == null:
+		return
+
+	for shape in grabbed_collision_shapes:
+		if is_instance_valid(shape):
+			shape.disabled = false
+
+	var forward = player.player_mesh.global_transform.basis.z
+
+	grabbed_corpse.global_transform.origin = player.player_mesh.global_transform.origin + forward * 2 + Vector3.UP
+
+	player.is_carrying = false
+	grabbed_corpse.is_being_carried = false
+
+	grabbed_collision_shapes.clear()
+	grabbed_corpse = null
+	
+	
+	
 func getDeadBodyInArea():
 	for body in area.get_overlapping_bodies():
 		if body == player:
@@ -48,75 +115,16 @@ func openCorpseLoot(corpse):
 	var corpseKey = getCorpseKey(corpse)
 
 	if !corpse_loot_data.has(corpseKey):
-		corpse_loot_data[corpseKey] = generateLootForCorpse(corpse)
+		corpse_loot_data[corpseKey] = Items.generateLootForCorpse(corpse)
 
 	clearLootGrid()
 	loadLootIntoGrid(corpse_loot_data[corpseKey])
-
+	
 	show()
 
 
-func generateLootForCorpse(corpse):
-	var loot = []
-
-	match corpse.stats.species.to_lower():
-
-		"wolf":
-			loot.append({
-				"item_key":"raw_meat_1",
-				"quantity":randi() % 2 + 2
-			})
-
-			loot.append({
-				"item_key":"bone",
-				"quantity":randi() % 2 + 1
-			})
 
 
-		"goat":
-			loot.append({
-				"item_key":"raw_meat_2",
-				"quantity":randi() % 2 + 2
-			})
-
-			if randf() < 0.4:
-				loot.append({
-					"item_key":"bone",
-					"quantity":1
-				})
-
-
-		"boar":
-			loot.append({
-				"item_key":"raw_meat_3",
-				"quantity":randi() % 3 + 3
-			})
-
-			loot.append({
-				"item_key":"bone",
-				"quantity":randi() % 2 + 1
-			})
-
-
-		"moose":
-			loot.append({
-				"item_key":"raw_meat_4",
-				"quantity":randi() % 4 + 5
-			})
-
-			loot.append({
-				"item_key":"bone",
-				"quantity":randi() % 3 + 2
-			})
-
-
-		_:
-			loot.append({
-				"item_key":"raw_meat_1",
-				"quantity":1
-			})
-
-	return loot
 
 func loadLootIntoGrid(lootData):
 	ensureSlotCount(lootData.size())
@@ -126,7 +134,7 @@ func loadLootIntoGrid(lootData):
 
 		holder.quantity = lootData[i]["quantity"]
 		holder.get_node("Slot").texture = Items.food[lootData[i]["item_key"]]["icon"]
-
+		
 func ensureSlotCount(amount):
 	while loot_grid.get_child_count() < amount:
 		var newSlot = loot_slot_holder.duplicate()
@@ -197,3 +205,10 @@ func loadData():
 
 	corpse_loot_data = file.get_var()
 	file.close()
+	updateSlots()
+
+
+
+func updateSlots()->void:
+	for child in loot_grid.get_children():
+		child.displayQuantity()

@@ -1,24 +1,44 @@
 extends Node
 
-onready var parent = $".."
-onready var animation = $"../character/AnimationPlayer"
-onready var tween =  $Tween
-onready var timer = $Timer
-onready var dmg_area = $"../Area"
-onready var stats = $"../Stats"
+onready var parent=$".."
+onready var animation=$"../character/AnimationPlayer"
+onready var tween=$Tween
+onready var timer=$Timer
+onready var dmg_area=$"../Area"
+onready var stats=$"../Stats"
+
+var combo_stage:int=0
+var combo_playing:bool=false
+var can_comboB:bool=false
+var can_comboC:bool=false
+var locked:bool=false
 
 
 
+func dealDMG():
+	stats.dealDamage()
 
 
+func combo1():
+	parent.combo_sequence = 2
+	parent.combo_timer = 30
+	unlockAnim()
+func combo2():
+	parent.combo_sequence = 3
+	parent.combo_timer = 30
+	unlockAnim()
+func combo3():
+	parent.combo_sequence = 1
+	parent.combo_timer = 0
+	unlockAnim()
+	
+	
+func resetCombo():
+	parent.can_base_atk3 = false
+	parent.can_base_atk2 = false
+	
 
 
-			
-func _ready():
-#	cleanCallTracks()
-#	connectUnlockAnimLastFrames()
-#	loadAnimations()
-	timer.connect("timeout", self, "_on_cleave_timeout")
 func lockMov():
 	parent.can_move = false
 
@@ -28,6 +48,16 @@ func canMove():
 func unlockAnim():
 	for key in parent.anim_locks:
 		parent.anim_locks[key] = false
+		parent.current_skill = "none"
+
+
+func baseATKseq():
+	if parent.atk_seq == 0:
+		parent.atk_seq += 1
+	else:
+		parent.atk_seq = 0
+
+
 
 
 func cleave1stpart():

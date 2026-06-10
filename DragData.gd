@@ -1,9 +1,11 @@
 extends TextureButton
-onready var icon = $Slot
-onready var parent = $"../../../.."
+onready var icon = get_parent().get_node("Slot")
+onready var parent = $"../../../../.."
 var quantity = 0
+var max_quantity = 100
 var item = "null"
 var type = "item"
+var stackable = true 
 var is_from_skill_tree = false
 var SAVE_DIR = "user://slots/"
 
@@ -19,170 +21,82 @@ func _physics_process(delta):
 		
 
 
-func get_drag_data(position: Vector2):
-	var slot = get_parent().get_name()
-	var data = {
-		"origin_node": self,
-		"origin_slot": slot,
-		"origin_texture": icon.texture,
-		"origin_quantity": quantity,
-		"origin_item": item,
-		"type": type
+func get_drag_data(position:Vector2):
+	if icon.texture==null:
+		return null
+
+	var preview=TextureRect.new()
+	preview.texture=icon.texture
+	preview.rect_size=Vector2(64,64)
+	set_drag_preview(preview)
+
+	return {
+		"origin_node":self,
+		"origin_icon":icon,
+		"origin_texture":icon.texture,
+		"origin_quantity":quantity,
+		"origin_item":item,
+		"type":type,
+		"origin_stackable":stackable,
+		"origin_max_quantity":max_quantity,
+		"origin_is_from_skill_tree":is_from_skill_tree
 	}
 
-	print("Item type:", item)
-
-	return data
-	
-
-func can_drop_data(position, data):
-	if data == null:
-		print("Drop rejected: data is null")
-		return false
-
-	if !data.has("origin_node"):
-		print("Drop rejected: missing origin_node")
+func can_drop_data(position,data):
+	if data==null:
 		return false
 
 	if !data.has("origin_texture"):
-		print("Drop rejected: missing origin_texture")
 		return false
-
-	data["target_texture"] = icon.texture
-	data["target_quantity"] = quantity
-	data["target_item"] = item
 
 	return true
 
 
-func drop_data(position, data):
-
-	if data == null:
-		print("Drop failed: data is null")
+func drop_data(position,data):
+	if data==null or !data.has("origin_texture"):
 		return
 
-	if !data.has("origin_texture"):
-		print("Drop failed: missing origin_texture")
+	var origin_node=data.get("origin_node",null)
+	var origin_icon=data.get("origin_icon",null)
+
+	if origin_icon==null:
 		return
 
-	if !data.has("origin_node"):
-		print("Drop failed: missing origin_node")
-		return
+	var source_is_skill_tree=data.get("origin_is_from_skill_tree",false)
 
-	var origin_node = data["origin_node"]
-
-	if origin_node == null:
-		print("Drop failed: origin_node is null")
-		return
-
-	if !is_instance_valid(origin_node):
-		print("Drop failed: origin_node is invalid")
-		return
-
-	var origin_texture = data["origin_texture"]
-
-	if origin_texture == null:
-		print("Drop failed: origin_texture is null")
-		return
-
-	var target_texture = icon.texture
-
-	var origin_quantity = 1
-
-	if data.has("origin_quantity"):
-		origin_quantity = int(data["origin_quantity"])
-
-	var origin_icon = origin_node.get_node_or_null("Slot")
-
-	if origin_icon == null:
-		print("Drop failed: origin Slot node missing")
-		return
-
-	if !is_instance_valid(origin_icon):
-		print("Drop failed: origin Slot node invalid")
-		return
-
-	var source_is_skill_tree = false
-
-	if "is_from_skill_tree" in origin_node:
-		source_is_skill_tree = origin_node.is_from_skill_tree
-
-	# Same texture dropped onto same slot
-	if origin_texture == target_texture:
-
-		if source_is_skill_tree:
-			print("Ignored duplicate skill-tree drop")
-			return
-
-		quantity += origin_quantity
-
-		if "quantity" in origin_node:
-			origin_node.quantity = 0
-
-		if "item" in origin_node:
-			origin_node.item = "null"
-
-		origin_icon.texture = null
-
-		if origin_icon.has_node("CD"):
-			var cd = origin_icon.get_node_or_null("CD")
-			if cd:
-				cd.text = ""
-
-		return
-
-	# Skill tree -> skill bar = copy
 	if source_is_skill_tree:
-
-		icon.texture = origin_texture
-
-		if data.has("origin_item"):
-			item = data["origin_item"]
-
-		if data.has("type"):
-			type = data["type"]
-
-		print("Skill copied from skill tree")
+		icon.texture=data["origin_texture"]
+		item=data.get("origin_item","null")
+		type=data.get("type","item")
 		return
 
-	# Inventory/skillbar swap
-	var temp_texture = icon.texture
-	var temp_quantity = quantity
-	var temp_item = item
+	if origin_node==self:
+		return
 
-	icon.texture = origin_texture
-	quantity = origin_quantity
+	var temp_texture=icon.texture
+	var temp_quantity=quantity
+	var temp_stackable=stackable
+	var temp_max_quantity=max_quantity
+	var temp_item=item
+	var temp_type=type
 
-	if data.has("origin_item"):
-		item = data["origin_item"]
+	icon.texture=data["origin_texture"]
+	quantity=data.get("origin_quantity",0)
+	stackable=data.get("origin_stackable",true)
+	max_quantity=data.get("origin_max_quantity",9999999999)
+	item=data.get("origin_item","null")
+	type=data.get("type","item")
 
-	origin_icon.texture = temp_texture
+	origin_icon.texture=temp_texture
 
-	if "quantity" in origin_node:
-		origin_node.quantity = temp_quantity
-
-	if "item" in origin_node:
-		origin_node.item = temp_item
-
-	if origin_icon.texture == null:
-
+	if origin_node!=null:
 		if "quantity" in origin_node:
-			origin_node.quantity = 0
-
+			origin_node.quantity=temp_quantity
+		if "stackable" in origin_node:
+			origin_node.stackable=temp_stackable
+		if "max_quantity" in origin_node:
+			origin_node.max_quantity=temp_max_quantity
 		if "item" in origin_node:
-			origin_node.item = "null"
-
-		if origin_icon.has_node("CD"):
-			var cd = origin_icon.get_node_or_null("CD")
-			if cd:
-				cd.text = ""
-
-	if icon.texture == null:
-
-		quantity = 0
-		item = "null"
-
-		if icon.has_node("CD"):
-			var cd = icon.get_node_or_null("CD")
-			if cd:
-				cd.text = ""
+			origin_node.item=temp_item
+		if "type" in origin_node:
+			origin_node.type=temp_type

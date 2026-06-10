@@ -1,7 +1,6 @@
 extends TextureRect
 
 onready var player = $"../../../../.."
-
 var savedTexture: Texture
 var savedQuantity: int
 
@@ -23,9 +22,9 @@ func saveData():
 	var file = File.new()
 	if file.open(savePath, File.WRITE) != OK:
 		return
-
+	var holder = get_parent().get_node("TextureButton")
 	savedTexture = texture
-	savedQuantity = get_parent().quantity
+	savedQuantity =holder.quantity
 
 	if savedTexture != null:
 		file.store_line(savedTexture.get_path())
@@ -40,13 +39,7 @@ func saveData():
 
 func loadData():
 	var parentName = get_parent().get_name()
-	var savePath = (
-		"user://Characters/"
-		+ player.entity_name
-		+ "/"
-		+ parentName
-		+ "_saved_texture_data.txt"
-	)
+	var savePath = ("user://Characters/"+ player.entity_name+ "/"+ parentName+ "_saved_texture_data.txt")
 
 	var file = File.new()
 
@@ -60,17 +53,17 @@ func loadData():
 	var quantity_str = file.get_line()
 
 	file.close()
-
+	var holder = get_parent().get_node("TextureButton")
 	if path == "":
 		texture = null
-		get_parent().quantity = 0
+		holder.quantity = 0
 		return
 
 	var loadedTexture = load(path)
 
 	if loadedTexture != null:
 		texture = loadedTexture
-		get_parent().quantity = int(quantity_str)
+		holder.quantity = int(quantity_str)
 	else:
 		texture = null
-		get_parent().quantity = 0
+		holder.quantity = 0
