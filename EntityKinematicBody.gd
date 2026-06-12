@@ -15,6 +15,7 @@ onready var melee_ray =$RayMelee
 onready var animation =$AnimationPlayer
 onready var dmg_area = $AreaDamage
 
+var stored_body:KinematicBody = null
 var nav_path = []
 var nav_index = 0
 var wander_target = Vector3.ZERO
@@ -32,7 +33,7 @@ var is_sitting:bool = false
 var is_swimming:bool = false
 var is_dead:bool = false
 var on_guard:bool = false 
-
+var is_being_carried = false
 var target: Node = null
 var targets = []
 
@@ -61,14 +62,19 @@ var anim_locks = {
 	
 }
 
+
+
+
+
 func _ready()->void:
 	ignoreMobBodies()
 
 func _physics_process(delta):
 	animations()
-	if Engine.get_physics_frames() % 2 == 0:
-		CommonBehaviours.gravity(self)
-		switchState()
+	if is_being_carried == false:
+		if Engine.get_physics_frames() % 2 == 0:
+			CommonBehaviours.gravity(self)
+			switchState()
 func propulsion(power:float)->void:
 	if !has_meta("dir"):
 		return

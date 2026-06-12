@@ -7,10 +7,10 @@ onready var dmg_area = $"../AreaDamage"
 onready var stats = $"../Stats"
 
 func _ready():
+	animation.connect("animation_finished", self, "_on_animation_finished")
 
-	cleanCallTracks()
-	connectUnlockAnimLastFrames()
-	loadAnimations()
+func _on_animation_finished(anim_name):
+	unlockAnim()
 func lockMov():
 	parent.can_move = false
 

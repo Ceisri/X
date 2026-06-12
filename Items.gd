@@ -79,7 +79,15 @@ var flasks = {
 		"description": "placeholder1"
 	}
 }
+var cooldowns={
+	flasks["energy"].icon.resource_path:15.0,
+	flasks["medicine"].icon.resource_path:30.0,
+	flasks["poison"].icon.resource_path:20.0,
+	flasks["power"].icon.resource_path:60.0
+}
 
+func getCooldown(path:String)->float:
+	return cooldowns.get(path,0.0)
 var food = {
 	"boar meat": {
 		"price": 0,
@@ -121,9 +129,11 @@ var armors = {
 		"description": "Leather armor",
 
 		"defences": {
-			"slash": 15,
-			"pierce": 5,
-			"blunt": 2
+			"slash": 1005,
+			"pierce": 500,
+			"cold": 500,
+			"heat": 500,
+			"blunt": 1002
 		},
 
 		"max_health": 10
@@ -198,8 +208,8 @@ var weapons = {
 		"two handed":false,
 		"description": "placeholder1",
 		"damages": {
-			"slash": 3,
-			"pierce": 2
+			"slash": 0.33,
+			"pierce": 0.3
 		}
 	},
 
@@ -210,8 +220,8 @@ var weapons = {
 		"two handed":true,
 		"description": "placeholder2",
 		"damages": {
-			"pierce": 66,
-			"slash": 2
+			"pierce":0.8,
+			"slash": 0.05
 		}
 	},
 
@@ -222,8 +232,8 @@ var weapons = {
 		"two handed":false,
 		"description": "placeholder2",
 		"damages": {
-			"pierce": 66,
-			"slash": 2
+			"pierce": 0,
+			"slash": 0
 		}
 	}
 }

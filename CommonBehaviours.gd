@@ -98,7 +98,7 @@ func useItem(button,inventory_grid,stats,floating_text_parent=null)->bool:
 	if texture==Items.flasks["medicine"]["icon"]:
 		if stats.health>=stats.max_health:
 			return false
-		stats.health=min(stats.health+10,stats.max_health)
+		stats.health=min(stats.health + (stats.max_health * 0.1),stats.max_health)
 		consumed=true
 
 	elif texture==Items.flasks["energy"]["icon"]:

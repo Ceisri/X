@@ -8,23 +8,52 @@ var skills = {
 	"cleave":preload("res://world/interface/assets/icons/skills/sword/Warriorskill_21_blades.png"),
 	"overhead strike":preload("res://world/interface/assets/icons/skills/sword/Holy_power.png"),
 	"battlecry":preload("res://world/interface/assets/icons/skills/unarmed/skill_189.png"),
+	"death from above":preload("res://world/interface/assets/icons/skills/assasin/vortex2.png"),
+	"flury of blows":preload("res://world/interface/assets/icons/skills/assasin/vortex.png"),
 	"dodge":preload("res://world/interface/assets/icons/skills/unarmed/Aura_Jump.png")}
 
-
+var status_icons = {
+	"bleed": preload("res://world/interface/assets/icons/skills/assasin/cut.png"),
+	"stun": preload("res://world/interface/assets/icons/skills/assasin/Skill_286.png"),
+	"staggered": preload("res://world/interface/assets/icons/skills/assasin/Escape.png"),
+	"slow": preload("res://world/interface/assets/icons/skills/assasin/Skill_Backstab.png"),
+	"armor_break": preload("res://world/interface/assets/icons/skills/assasin/Skill_Blind.png"),
+	"burn": preload("res://world/interface/assets/icons/skills/assasin/Skill_Hostage.png"),
+	"freeze": preload("res://world/interface/assets/icons/skills/assasin/Skill_HideInForest.png"),
+}
 
 var descriptions = {
 	"base attack":"Hits all enemies in front of you.",
 	"cleave":"Hits all enemies in front of you.",
 	"battlecry":"Increases combat effectiveness.",
 	"dodge":"Avoid the next attack."}
+	
+var skill_rotation_allowed = {
+	"base attack":true,
+	"section":true,
+	"death from above":false,
+	"perforation trifecta":true,
+	"flury of blows":false,
+	"parry":false,
+	"cleave":true,
+	"overhead strike":false,
+	"battlecry":false,
+	"dodge":true
+}
+
+func canRotateDuringSkill(skill:String)->bool:
+	return skill_rotation_allowed.get(skill,true)
 var cooldowns = {
 	skills["cleave"].resource_path:3.0,
-	skills["perforation trifecta"].resource_path:4.5,
+	skills["perforation trifecta"].resource_path:33,
 	skills["section"].resource_path:6,
 	skills["overhead strike"].resource_path:1.5,
+	skills["flury of blows"].resource_path:33.0,
+	skills["death from above"].resource_path:8.0,
 	skills["battlecry"].resource_path:6.0,
-	skills["dodge"].resource_path:0.0,
+	skills["dodge"].resource_path:2.3,
 	skills["base attack"].resource_path:0.0}
+	
 var cooldown_effects = {
 
 	# 25% chance to completely reset its own cooldown
@@ -119,11 +148,19 @@ var skill_damages = {
 		DamageTypes.Type.slash: 5,
 		DamageTypes.Type.blunt: 5
 	},
-
+	"overhead strike": {
+		DamageTypes.Type.slash: 15,
+	},
+	"death from above": {
+		DamageTypes.Type.slash: 25,
+	},
+	"flury of blows": {
+		DamageTypes.Type.slash: 11,
+	},
 	"base attack": {
-		DamageTypes.Type.slash: 2,
-		DamageTypes.Type.blunt: 2,
-		DamageTypes.Type.acid: 10,
+		DamageTypes.Type.slash: 6,
+		DamageTypes.Type.blunt: 6,
+		DamageTypes.Type.acid:6,
 	},
 
 	"perforation trifecta": {
@@ -136,11 +173,92 @@ var skill_damages = {
 	}
 }
 
+var skill_damage_level_multiplier = {
+	"base attack": 0.10,
+	"cleave": 0.15,
+	"overhead strike": 0.20,
+	"death from above": 0.25,
+	"flury of blows": 0.10,
+	"perforation trifecta": 0.15,
+	"section": 0.20
+}
+func getDamageMultiplier(skill_name:String, skill_level:int) -> float:
+	return 1.0 + skill_level * skill_damage_level_multiplier.get(skill_name, 0.0)
+
 func getDamages(skill_name:String, weapon_mult:float = 1.0) -> Dictionary:
 	var base = skill_damages.get(skill_name, {}).duplicate(true)
 	for k in base.keys():
 		base[k] *= weapon_mult
 	return base
+	
+var on_hit_effects = {
+	"base attack":{
+		"energy_restore":1.0,
+		"lifesteal_flat":0.0,
+		"lifesteal_percent":0.0,
+		"reduce_cooldowns":{
+			"cleave":0.25,
+			"section":0.25,
+			"perforation trifecta":0.25,
+			"overhead strike":0.35
+		}
+	},
+}
+func applyOnHitEffects(skill_name:String,effects:Dictionary,active_cooldowns:Dictionary,stats,damage_dealt:float)->void:
+
+	if !effects.has(skill_name):
+		return
+
+	var effect = effects[skill_name]
+
+	# ----------------------------------
+	# ENERGY
+	# ----------------------------------
+	if effect.has("energy_restore"):
+		stats.energy = min(stats.max_energy,stats.energy + effect["energy_restore"])
+
+	# ----------------------------------
+	# FLAT LIFESTEAL
+	# ----------------------------------
+
+	if effect.has("lifesteal_flat"):
+		stats.health = min(stats.max_health,stats.health + effect["lifesteal_flat"])
+
+	# ----------------------------------
+	# PERCENT LIFESTEAL
+	# ----------------------------------
+
+	if effect.has("lifesteal_percent"):
+		stats.health = min(stats.max_health,stats.health + damage_dealt * effect["lifesteal_percent"])
+	# ----------------------------------
+	# COOLDOWN REDUCTION
+	# ----------------------------------
+
+	if effect.has("reduce_cooldowns"):
+
+		for target_skill in effect["reduce_cooldowns"]:
+
+			if !skills.has(target_skill):
+				continue
+
+			var reduction = effect["reduce_cooldowns"][target_skill]
+
+			var path = skills[target_skill].resource_path
+
+			if !active_cooldowns.has(path):
+				continue
+
+			active_cooldowns[path] = max(
+				0.0,
+				active_cooldowns[path] - reduction
+			)
+
+			if active_cooldowns[path] <= 0.0:
+				active_cooldowns.erase(path)
+
+	if stats.health > stats.max_health:
+		stats.health = stats.max_health
+
 var skill_energy_cost = {
 	"cleave": 3,
 	"section": 9,
@@ -150,3 +268,73 @@ var skill_energy_cost = {
 
 func getEnergyCost(skill:String) -> float:
 	return skill_energy_cost.get(skill, 0)
+
+
+var status_debuffs = {
+	"base attack": {
+		"bleed": {
+			"base_damage": 10002.0,
+			"duration": 15.0,
+			"can_stack": true,
+			"stack_limit": 5,
+		}
+	},
+
+	"section": {
+		"bleed": {
+			"duration": 3.0,
+			"base_damage": 1.0,
+			"can_stack": true
+		}
+	},
+
+	"cleave": {
+		"bleed": {
+			"duration": 4.0,
+			"base_damage": 2.0,
+			"can_stack": true
+		}
+	},
+
+	"perforation trifecta": {
+		"bleed": {
+			"duration": 6.0,
+			"base_damage": 2.5,
+			"can_stack": true
+		}
+	},
+
+	"overhead strike": {
+		"stun": {
+			"duration": 2.0,
+			"can_stack": false
+		}
+	},
+
+	"death from above": {
+		"stun": {
+			"duration": 1.5,
+			"can_stack": false
+		},
+		"bleed": {
+			"duration": 3.0,
+			"base_damage": 1.5,
+			"can_stack": true
+		}
+	},
+
+	"flury of blows": {
+		"bleed": {
+			"duration": 2.0,
+			"base_damage": 1.0,
+			"can_stack": true
+		}
+	},
+
+	"battlecry": {
+		"staggered": {
+			"duration": 2.5,
+			"can_stack": false
+		}
+	}
+}
