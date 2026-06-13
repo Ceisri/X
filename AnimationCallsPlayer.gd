@@ -18,19 +18,31 @@ var locked:bool=false
 func dealDMG():
 	stats.dealDamage()
 
+func flipDirection()->void:
+	unlockAnim()
+	parent.direction = -parent.direction
+	parent.player_mesh.rotation.y += PI
+	parent.turnable.rotation.y += PI
+	parent.flip_blend_timer = 0.3
+	parent.dodge_cleanup_timer = 0.03
+	parent.dodge_cleanup_timer = 0.1
+	unlockAnim()
 
-func combo1():
-	parent.combo_sequence = 2
-	parent.combo_timer = 30
-	unlockAnim()
-func combo2():
-	parent.combo_sequence = 3
-	parent.combo_timer = 30
-	unlockAnim()
-func combo3():
-	parent.combo_sequence = 1
-	parent.combo_timer = 0
-	unlockAnim()
+	
+func disableCollisions()->void:
+	for body in get_tree().get_nodes_in_group("Entity"):
+		if body == parent:
+			continue
+		parent.add_collision_exception_with(body)
+		body.add_collision_exception_with(parent)
+func enableCollisions()->void:
+	for body in get_tree().get_nodes_in_group("Entity"):
+		if body == parent:
+			continue
+		parent.remove_collision_exception_with(body)
+		body.remove_collision_exception_with(parent)
+
+
 	
 	
 func resetCombo():
@@ -49,6 +61,7 @@ func unlockAnim():
 	for key in parent.anim_locks:
 		parent.anim_locks[key] = false
 		parent.current_skill = "none"
+		parent.last_active_skill = ""
 
 
 func baseATKseq():

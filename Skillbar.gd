@@ -11,14 +11,13 @@ var active_cooldowns = {}
 var edit = false
 var capture_slot = null
 var expand_state = 0
-var mouse_repeat_frames:int=16
 var mouse_repeat_counter={}
-var no_press_tween_skills=["base attack", "parry"]
-var hold_skills = {
-	"parry": true,
-	"guard": true
+var no_press_tween_skills=["base attack","parry"]
+var hold_skills={
+	"parry":true,
+	"guard":true,
+	"base attack":true,
 }
-
 
 const CONFIG_FILE_PATH = "user://skillbar_keybinds.cfg"
 const ACTION_PREFIX = "skill_slot_"
@@ -98,6 +97,7 @@ func createDefaultSlots()->void:
 		grid.get_node("ButtonHolder"+str(i)).get_node("Key").text=keys[i]
 
 
+
 func _physics_process(delta)->void:
 	updateCooldowns(delta)
 	if player.cursor_visible == false:
@@ -118,8 +118,8 @@ func holdInputs()->void:
 				var holder = grid.get_child(i)
 				var slot = holder.get_node("Slot")
 
-				if slot.texture and PlayerSkills.skills.has(skill):
-					if slot.texture == PlayerSkills.skills[skill]:
+				if slot.texture and Skills.skills.has(skill):
+					if slot.texture == Skills.skills[skill]:
 						var action_name = ACTION_PREFIX + str(i)
 						if Input.is_action_pressed(action_name):
 							still_held = true
@@ -133,15 +133,17 @@ func holdInputs()->void:
 					var holder = grid2.get_child(i)
 					var slot = holder.get_node("Slot")
 
-					if slot.texture and PlayerSkills.skills.has(skill):
-						if slot.texture == PlayerSkills.skills[skill]:
+					if slot.texture and Skills.skills.has(skill):
+						if slot.texture == Skills.skills[skill]:
 							var action_name = ACTION_PREFIX2 + str(i)
 							if Input.is_action_pressed(action_name):
 								still_held = true
 							break
 
 			if !still_held:
-				player.anim_locks[skill] = false
+				player.anim_locks[skill]=false # 
+				if player.current_skill==skill: #
+					player.current_skill="" #
 
 func setSlotVisible(holder,state:bool)->void:
 	holder.modulate.a=1.0 if state else 0.0
@@ -173,6 +175,8 @@ func expandCollapse()->void:
 onready var skill_tree =   $"../SkillTreeRoot/SkillsTreeHolder"
 
 func skills(slot)->void:
+	if player.anim_locks["stunned"] == true or player.anim_locks["staggered"] == true:
+		return
 	# ==================================================
 	# CACHE REFERENCES
 	# ==================================================
@@ -186,13 +190,13 @@ func skills(slot)->void:
 		return
 
 	var path=slot.texture.resource_path
-
+	
 	# ==================================================
 	# DETECT IF TEXTURE IS A SKILL OR AN ITEM
 	# ==================================================
 	var is_skill=false
-	for skill in PlayerSkills.skills:
-		if PlayerSkills.skills[skill]==slot.texture:
+	for skill in Skills.skills:
+		if Skills.skills[skill]==slot.texture:
 			is_skill=true
 			break
 
@@ -203,6 +207,9 @@ func skills(slot)->void:
 
 		var holder=slot.get_parent()
 		var button=holder.get_node("TextureButton")
+
+		if active_cooldowns.has(path):
+			return
 
 		tween.stop_all()
 		tween.interpolate_property(slot,"rect_scale",Vector2.ONE,Vector2(.9,.9),.08,Tween.TRANS_QUAD,Tween.EASE_OUT)
@@ -220,6 +227,11 @@ func skills(slot)->void:
 
 		if CommonBehaviours.useItem(button,inventory_grid,stats):
 
+			var cooldown=Items.getCooldown(path)
+
+			if cooldown>0.0:
+				active_cooldowns[path]=cooldown
+
 			button.quantity-=1
 
 			if button.quantity<=0:
@@ -228,7 +240,6 @@ func skills(slot)->void:
 				button.item="null"
 
 		return
-
 	# ==================================================
 	# SKILL SECTION
 	# ==================================================
@@ -237,9 +248,9 @@ func skills(slot)->void:
 	if active_cooldowns.has(path):
 		return
 
-	for skill in PlayerSkills.skills:
+	for skill in Skills.skills:
 
-		var texture=PlayerSkills.skills[skill]
+		var texture=Skills.skills[skill]
 
 		# wrong skill
 		if path!=texture.resource_path:
@@ -258,14 +269,18 @@ func skills(slot)->void:
 		# Base attack is excluded because it uses combo
 		# sequencing and should keep its current behavior.
 		# --------------------------------------------------
-		if skill!="base attack":
+		# --------------------------------------------------
+
+		if !hold_skills.has(skill):
 			if player.anim_locks.has(skill) and player.anim_locks[skill]:
 				return
+		elif active_cooldowns.has(path):
+			return
 
 		# --------------------------------------------------
 		# RESOURCE COST CHECK
 		# --------------------------------------------------
-		var energy_cost=PlayerSkills.getEnergyCost(skill)
+		var energy_cost=Skills.getEnergyCost(skill)
 
 		if energy_cost>0:
 
@@ -290,29 +305,54 @@ func skills(slot)->void:
 		# TRIGGER SKILL
 		# --------------------------------------------------
 		# base attack can NEVER interrupt anything
-		if skill=="base attack":
+		if player.anim_locks.has("dodge") and player.anim_locks["dodge"] and skill!="dodge":
+			return
+
+		if skill=="dodge":
+			animationcalls.unlockAnim()
+
+		elif skill=="parry":
+			if player.anim_locks.has("dodge") and player.anim_locks["dodge"]:
+				return
+
+			animationcalls.unlockAnim()
+
+		elif skill=="base attack":
+			if player.anim_locks.has("base attack") and player.anim_locks["base attack"]:
+				return
+
 			for k in player.anim_locks:
 				if k!="base attack" and player.anim_locks[k]:
 					return
-		else:
-			# any skill can interrupt base attack
-			player.anim_locks["base attack"]=false
 
-		animationcalls.unlockAnim()
+		else:
+			if player.anim_locks.has("base attack"):
+				player.anim_locks["base attack"]=false
+
+		player.animation_tree.active=true
+		player.flip_blend_timer=0.0
+		player.dodge_cleanup_timer=0.0
+		player.dodge_cleanup_reset=false
+
+		if skill!="base attack":
+			animationcalls.unlockAnim()
+
 		player.anim_locks[skill]=true
 		player.current_skill=skill
 		player.combat_timer=10
 
+
+
 		# --------------------------------------------------
 		# APPLY COOLDOWN
 		# --------------------------------------------------
-		var cooldown=PlayerSkills.getCooldown(path)
+		var cooldown=Skills.getCooldown(path)
 		cooldown/=max(.01,player.stats.derived_stats["cooldown_reduction"])
 
 		active_cooldowns[path]=cooldown
 
 		# Apply cooldown manipulation effects
-		PlayerSkills.applyCooldownEffects(skill,active_cooldowns)
+		Skills.applyCooldownEffects(skill,active_cooldowns)
 
 		return
 
@@ -320,13 +360,13 @@ func skills(slot)->void:
 
 onready var tween2 = $Tween2
 func reimburseSkill(skill_name:String)->void:
-	if !PlayerSkills.skills.has(skill_name):
+	if !Skills.skills.has(skill_name):
 		return
 
-	var texture=PlayerSkills.skills[skill_name]
+	var texture=Skills.skills[skill_name]
 	var path=texture.resource_path
 
-	var energy_cost=PlayerSkills.getEnergyCost(skill_name)
+	var energy_cost=Skills.getEnergyCost(skill_name)
 
 	if energy_cost>0:
 		player.stats.energy+=energy_cost
@@ -343,9 +383,9 @@ func resetTween(slot)->void:
 	var path = slot.texture.resource_path
 
 	# no cooldown defined or explicitly zero -> ignore
-	if !PlayerSkills.cooldowns.has(path):
+	if !Skills.cooldowns.has(path):
 		return
-	if PlayerSkills.cooldowns[path] <= 0.0:
+	if Skills.cooldowns[path] <= 0.0:
 		return
 
 	var t:Tween = tween2
@@ -357,63 +397,65 @@ func resetTween(slot)->void:
 
 	t.start()
 
-func updateCooldowns(delta)->void:
-	var processed={}
+
+onready var inventory_grid=$"../Inventory/ScrollContainer/GridContainer"
+onready var inventory = $"../Inventory"
+
+func updateCooldowns(delta):
+	for key in active_cooldowns.keys():
+		active_cooldowns[key]=max(active_cooldowns[key]-delta,0.0)
+
+	inventory.inventoryCooldowns(delta)
 
 	for container in [grid,grid2]:
 		for holder in container.get_children():
+			var icon=holder.get_node("Slot")
+			var label=holder.get_node("CD")
 
-			var slot=holder.get_node("Slot")
-			var cd=holder.get_node("CD")
-
-			if slot.texture==null:
-				cd.text=""
+			if !icon.texture:
+				label.text=""
 				continue
 
-			var path=slot.texture.resource_path
+			var key=icon.texture.resource_path
+			if !active_cooldowns.has(key):
+				label.text=""
+				continue
 
-			if active_cooldowns.has(path):
+			var t=active_cooldowns[key]
+			label.text=str(int(ceil(max(t,0))))
+			if t<=0:
+				active_cooldowns.erase(key)
 
-				if !processed.has(path):
-					active_cooldowns[path]-=delta
-					processed[path]=true
+	for holder in inventory_grid.get_children():
+		var icon=holder.get_node("Slot")
+		var label=holder.get_node("CD")
 
-				cd.text=str(int(ceil(max(active_cooldowns[path],0))))
+		if !icon.texture:
+			label.text=""
+			continue
 
-				if active_cooldowns[path]<=0:
-					active_cooldowns.erase(path)
-					cd.text=""
-					if slot.texture and slot.texture.resource_path==path:
-						resetTween(slot)
-						break
-			else:
-				cd.text=""
+		var key=icon.texture.resource_path
+		if !active_cooldowns.has(key):
+			label.text=""
+			continue
 
-
-
-
-func matchInputSlot()->void:#calls skills based on slot and assigned key
+		var t=active_cooldowns[key]
+		label.text=str(int(ceil(max(t,0))))
+		if t<=0:
+			active_cooldowns.erase(key)
+			
+			
+			
+func matchInputSlot()->void:
 	for i in range(grid.get_child_count()):
 		var holder=grid.get_child(i)
-		var action_name=ACTION_PREFIX+str(i)
-		if Input.is_action_just_pressed(action_name):
+		if Input.is_action_pressed(ACTION_PREFIX+str(i)):
 			skills(holder.get_node("Slot"))
+
 	for i in range(grid2.get_child_count()):
 		var holder=grid2.get_child(i)
-		var action_name=ACTION_PREFIX2+str(i)
-		if !mouse_repeat_counter.has(action_name):
-			mouse_repeat_counter[action_name]=0
-		if Input.is_action_just_pressed(action_name):
+		if Input.is_action_pressed(ACTION_PREFIX2+str(i)):
 			skills(holder.get_node("Slot"))
-			mouse_repeat_counter[action_name]=0
-		elif Input.is_action_pressed(action_name):
-			mouse_repeat_counter[action_name]+=1
-			if mouse_repeat_counter[action_name]>=mouse_repeat_frames:
-				skills(holder.get_node("Slot"))
-				mouse_repeat_counter[action_name]=0
-		else:
-			mouse_repeat_counter[action_name]=0
-
 
 
 

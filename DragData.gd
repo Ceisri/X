@@ -1,7 +1,7 @@
 extends TextureButton
 onready var icon = get_parent().get_node("Slot")
 onready var parent = $"../../../../.."
-var quantity = 0
+var quantity = 1
 var max_quantity = 100
 var item = "null"
 var type = "item"
@@ -43,60 +43,35 @@ func get_drag_data(position:Vector2):
 	}
 
 func can_drop_data(position,data):
-	if data==null:
-		return false
-
-	if !data.has("origin_texture"):
-		return false
-
 	return true
 
+func drop_data(p,d):
+	if typeof(d)!=TYPE_DICTIONARY or !d.has("origin_texture"):return
+	var o=d.get("origin_node");if o==self:return
+	var oi=d.get("origin_icon")
+	var from_skill_tree=d.get("origin_is_from_skill_tree",false)
 
-func drop_data(position,data):
-	if data==null or !data.has("origin_texture"):
-		return
+	var tt=icon.texture
+	var tq=quantity
+	var ti=item
+	var ty=type
+	var ts=stackable
+	var tm=max_quantity
 
-	var origin_node=data.get("origin_node",null)
-	var origin_icon=data.get("origin_icon",null)
+	icon.texture=d["origin_texture"]
+	quantity=d.get("origin_quantity",1)
+	item=d.get("origin_item","null")
+	type=d.get("type","item")
+	stackable=d.get("origin_stackable",true)
+	max_quantity=d.get("origin_max_quantity",9999999999)
 
-	if origin_icon==null:
-		return
+	if oi and !from_skill_tree:
+		oi.texture=tt
 
-	var source_is_skill_tree=data.get("origin_is_from_skill_tree",false)
-
-	if source_is_skill_tree:
-		icon.texture=data["origin_texture"]
-		item=data.get("origin_item","null")
-		type=data.get("type","item")
-		return
-
-	if origin_node==self:
-		return
-
-	var temp_texture=icon.texture
-	var temp_quantity=quantity
-	var temp_stackable=stackable
-	var temp_max_quantity=max_quantity
-	var temp_item=item
-	var temp_type=type
-
-	icon.texture=data["origin_texture"]
-	quantity=data.get("origin_quantity",0)
-	stackable=data.get("origin_stackable",true)
-	max_quantity=data.get("origin_max_quantity",9999999999)
-	item=data.get("origin_item","null")
-	type=data.get("type","item")
-
-	origin_icon.texture=temp_texture
-
-	if origin_node!=null:
-		if "quantity" in origin_node:
-			origin_node.quantity=temp_quantity
-		if "stackable" in origin_node:
-			origin_node.stackable=temp_stackable
-		if "max_quantity" in origin_node:
-			origin_node.max_quantity=temp_max_quantity
-		if "item" in origin_node:
-			origin_node.item=temp_item
-		if "type" in origin_node:
-			origin_node.type=temp_type
+	if o and !from_skill_tree:
+		if "quantity" in o:o.quantity=tq
+		if "item" in o:o.item=ti
+		if "type" in o:o.type=ty
+		if "stackable" in o:o.stackable=ts
+		if "max_quantity" in o:o.max_quantity=tm
+		if o.has_method("displayQuantity"):o.displayQuantity()

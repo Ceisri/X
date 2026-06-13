@@ -39,68 +39,55 @@ func collapse() -> void:
 	hide()
 
 
-
 func get_equipment_stats():
-	var stats_node = $"../../Stats"
+	var s=$"../../Stats"
 
-	for dmg_type in stats_node.weapon_damages:
-		stats_node.weapon_damages[dmg_type] = 0
+	for k in s.equipment_attributes: s.equipment_attributes[k]=0.0
+	for k in s.equipment_defence_bonus: s.equipment_defence_bonus[k]=0.0
+	for k in s.equipment_damage_bonus: s.equipment_damage_bonus[k]=0.0
 
-	for dmg_type in stats_node.defences:
-		stats_node.defences[dmg_type] = 0
+	applyArmorStats(slot_torso,Items.armors,s)
+	applyArmorStats(slot_hands,Items.armors,s)
+	applyArmorStats(slot_feet,Items.armors,s)
 
-	stats_node.max_health = 100
+	applyWeaponStats(slot_mainhand,Items.weapons,s)
+	applyWeaponStats(slot_offhand,Items.weapons,s)
 
-	applyArmorStats(slot_torso, Items.armors, stats_node)
-	applyArmorStats(slot_hands, Items.armors, stats_node)
-	applyArmorStats(slot_feet, Items.armors, stats_node)
+	s.updateAttributes()
 
-	applyWeaponStats(slot_mainhand, Items.weapons, stats_node)
-	applyWeaponStats(slot_offhand, Items.weapons, stats_node)
 
-	return stats_node
+func applyArmorStats(slot,armor_table,s):
+	if !slot.texture: return
 
-func applyArmorStats(slot, armor_table, stats_node):
-	if slot.texture == null:
-		return
+	for k in armor_table:
+		var a=armor_table[k]
+		if a["icon"]!=slot.texture: continue
 
-	for armor_id in armor_table:
-		var armor = armor_table[armor_id]
+		s.max_health+=a.get("max_health",0)
 
-		if armor["icon"] != slot.texture:
-			continue
+		for i in s.equipment_attributes:
+			s.equipment_attributes[i]+=a.get(i,0.0)
 
-		stats_node.max_health += armor.get("max_health", 0)
-
-		if armor.has("defences"):
-			for defence_name in armor["defences"]:
-				var dmg_type = stats_node.damage_type[defence_name]
-
-				stats_node.defences[dmg_type] += armor["defences"][defence_name]
-
+		if a.has("defences"):
+			for d in a["defences"]:
+				var t=s.damage_type[d]
+				s.equipment_defence_bonus[t]+=a["defences"][d]
 		break
-func applyWeaponStats(slot, weapon_table, stats_node):
-	if slot.texture == null:
-		return
+func applyWeaponStats(slot,weapon_table,s):
+	if !slot.texture: return
 
-	for weapon_id in weapon_table:
-		var weapon = weapon_table[weapon_id]
+	for k in weapon_table:
+		var w=weapon_table[k]
+		if w["icon"]!=slot.texture: continue
 
-		if weapon.get("icon") != slot.texture:
-			continue
+		for i in s.equipment_attributes:
+			s.equipment_attributes[i]+=w.get(i,0.0)
 
-		if weapon.has("damages"):
-
-			for damage_name in weapon["damages"].keys():
-
-				if typeof(damage_name) == TYPE_STRING and stats_node.damage_type.has(damage_name):
-					var dmg_type = stats_node.damage_type[damage_name]
-					stats_node.weapon_damages[dmg_type] += weapon["damages"][damage_name]
-
+		if w.has("damages"):
+			for d in w["damages"]:
+				var t=s.damage_type[d]
+				s.equipment_damage_bonus[t]+=w["damages"][d]
 		break
-
-
-
 
 
 
@@ -157,18 +144,10 @@ const FEET1_SCENE = preload("res://world/player/human/male/Feet1.tscn")
 
 
 func updateEquipment() -> void:
-	pass
-	var stats = $"../../Stats"
+	var stats=$"../../Stats"
+	updateArmorCache(stats.species,stats.sex)
 
-	if stats.species != "human":
-		return
-
-	if stats.sex != "male":
-		return
-
-	updateArmorCache(stats.species, stats.sex)
-
-	var changed = equipmentChanged()
+	var changed=equipmentChanged()
 
 	if changed:
 		updateEquipmentCache()
@@ -176,11 +155,8 @@ func updateEquipment() -> void:
 		updateHands()
 		updateFeet()
 
-
 	updateWeapons()
-
-	if changed:
-		get_equipment_stats()
+	get_equipment_stats()
 
 
 

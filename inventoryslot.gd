@@ -49,24 +49,16 @@ func updateStackableFromTexture():
 
 
 func displayQuantity():
-	if not icon:
-		print("displayQuantity: icon missing")
+	if !icon:
 		return
 
 	if icon.texture == null:
-		quantity = 0
 		if quantity_label:
 			quantity_label.text = ""
 		return
 
-	if quantity > 0:
-		if quantity_label:
-			quantity_label.text = str(round(quantity))
-	else:
-		if quantity_label:
-			quantity_label.text = ""
-		icon.texture = null
-
+	if quantity_label:
+		quantity_label.text = str(quantity) if quantity > 0 else ""
 
 
 func get_drag_data(position:Vector2):
@@ -90,37 +82,21 @@ func get_drag_data(position:Vector2):
 	}
 
 
-func can_drop_data(position, data):
-	if typeof(data) != TYPE_DICTIONARY:
-		return false
-
-	if !data.has("type"):
-		return false
-
-	if data.get("type") == "skill":
-		return false
-
-	return true
-
+func can_drop_data(p,d):return typeof(d)==TYPE_DICTIONARY and d.has("origin_texture") and d.has("origin_icon")
 
 func drop_data(position,data):
-	if typeof(data)!=TYPE_DICTIONARY:
-		return
+	if typeof(data)!=TYPE_DICTIONARY:return
 
 	var origin_node=data.get("origin_node",null)
+	if !is_instance_valid(origin_node) or origin_node==self:return
 
-	if !is_instance_valid(origin_node) or origin_node==self:
-		return
-
-	var origin_icon=origin_node.get_node_or_null("Slot")
-
-	if origin_icon==null:
-		return
+	var origin_icon=data.get("origin_icon",null)
+	if origin_icon==null:return
 
 	var origin_texture=data.get("origin_texture",null)
+	if origin_texture==null:return
 
-	if origin_texture==null:
-		return
+	var from_skill_tree=data.get("origin_is_from_skill_tree",false)
 
 	var origin_quantity=data.get("origin_quantity",0)
 	var origin_stackable=data.get("origin_stackable",false)
@@ -128,47 +104,35 @@ func drop_data(position,data):
 
 	var target_texture=icon.texture
 
-	if origin_texture==target_texture and stackable and origin_stackable:
+	if !from_skill_tree and origin_texture==target_texture and stackable and origin_stackable:
 		var total=quantity+origin_quantity
 
 		if total<=max_quantity:
 			quantity=total
-
-			if "quantity" in origin_node:
-				origin_node.quantity=0
-
+			if "quantity" in origin_node:origin_node.quantity=0
 			origin_icon.texture=null
 		else:
 			quantity=max_quantity
-
-			if "quantity" in origin_node:
-				origin_node.quantity=total-max_quantity
+			if "quantity" in origin_node:origin_node.quantity=total-max_quantity
 	else:
 		icon.texture=origin_texture
-		origin_icon.texture=target_texture
 
-		var temp_qty=quantity
-		quantity=origin_quantity
+		if !from_skill_tree:
+			origin_icon.texture=target_texture
 
-		if "quantity" in origin_node:
-			origin_node.quantity=temp_qty
+			var temp_qty=quantity
+			quantity=origin_quantity
+			if "quantity" in origin_node:origin_node.quantity=temp_qty
 
-		var temp_stack=stackable
-		stackable=origin_stackable
+			var temp_stack=stackable
+			stackable=origin_stackable
+			if "stackable" in origin_node:origin_node.stackable=temp_stack
 
-		if "stackable" in origin_node:
-			origin_node.stackable=temp_stack
-
-		var temp_max=max_quantity
-		max_quantity=origin_max_quantity
-
-		if "max_quantity" in origin_node:
-			origin_node.max_quantity=temp_max
+			var temp_max=max_quantity
+			max_quantity=origin_max_quantity
+			if "max_quantity" in origin_node:origin_node.max_quantity=temp_max
 
 	displayQuantity()
 
-	if origin_node.has_method("displayQuantity"):
+	if !from_skill_tree and origin_node.has_method("displayQuantity"):
 		origin_node.displayQuantity()
-
-	if inventory and inventory.has_method("saveData"):
-		inventory.saveData()

@@ -237,31 +237,38 @@ func combineSlot(index):
 
 
 onready var tween = $Tween
+var cooldowns = {}
+
+var flash_time={}
+onready var skillbar= $"../Skillbar"
+
+func get_cd(k):
+	return skillbar.active_cooldowns[k] if skillbar.active_cooldowns.has(k) else 0.0
+
+func set_cd(k,t):
+	if t>0.0:skillbar.active_cooldowns[k]=t
 func useItem(index):
-	var button=inventory_grid.get_node("InventorySlot"+str(index))
-	var slot=button.get_node("Slot")
+	var slot=inventory_grid.get_node("InventorySlot"+str(index))
+	var icon=slot.get_node("Slot")
+	if !icon.texture:return
+	var key=icon.texture.resource_path
+	if get_cd(key)>0.0:return
+	if !CommonBehaviours.useItem(slot,inventory_grid,stats):return
+	slot.quantity-=1
+	if slot.quantity<=0:
+		slot.quantity=0
+		icon.texture=null
+	set_cd(key,Items.getCooldown(key))
 
-	if slot.texture==null:
-		return
-
-	if CommonBehaviours.useItem(button,inventory_grid,stats):
-
-		# consume stack
-		button.quantity-=1
-
-		if button.quantity<=0:
-			button.quantity=0
-			slot.texture=null
-
-		# success animation only
-		tween.stop_all()
-		tween.interpolate_property(slot,"rect_scale",Vector2.ONE,Vector2(.9,.9),.08,Tween.TRANS_QUAD,Tween.EASE_OUT)
-		tween.interpolate_property(slot,"rect_scale",Vector2(.9,.9),Vector2.ONE,.08,Tween.TRANS_QUAD,Tween.EASE_IN,.08)
-		tween.start()
-
-	button.displayQuantity()
-	updateInventory()
-
+func inventoryCooldowns(delta):
+	for key in skillbar.active_cooldowns.keys():
+		var t=skillbar.active_cooldowns[key]-delta
+		skillbar.active_cooldowns[key]=0.0 if t<=0.0 else t
+	for slot in inventory_grid.get_children():
+		var icon=slot.get_node("Slot")
+		if !icon.texture:continue
+		var key=icon.texture.resource_path
+		if get_cd(key)<=0.0:continue
 
 
 

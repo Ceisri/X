@@ -65,8 +65,8 @@ func updateLevel():
 		can_be_dragged = true
 	if icon.texture != null:
 		var path = icon.texture.resource_path
-		for skill in PlayerSkills.skills:
-			var texture = PlayerSkills.skills[skill]
+		for skill in Skills.skills:
+			var texture = Skills.skills[skill]
 
 			if texture.resource_path == path:
 				skill_tree_node.skills[skill] = skill_level
