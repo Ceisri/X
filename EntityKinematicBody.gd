@@ -43,6 +43,8 @@ class AggroTarget:
 	
 var melee_step = 1
 var can_move:bool = true
+var is_in_combat:bool = false
+var current_skill:String = ""
 var anim_locks = {
 	"atk1":false,
 	"atk2":false,

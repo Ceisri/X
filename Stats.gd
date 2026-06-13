@@ -161,96 +161,6 @@ var derived_stats = {
 	"threat": 1.0
 }
 
-
-
-func updateAttributes():
-	max_health = base_max_health + get_total_attribute("vitality")* 20
-	# Primary stats
-	max_health = base_max_health + get_total_attribute("vitality") * 20
-
-	walk_speed = base_walk_speed + get_total_attribute("agility") * 0.2
-	run_speed = base_run_speed + get_total_attribute("agility") * 0.4
-
-	max_arcane = 100 + get_total_attribute("wisdom") * 10
-
-	for k in defences:
-		defences[k] = get_total_attribute("toughness") * 2.0
-
-	derived_stats["attack_speed"] = get_total_attribute("dexterity")
-
-	derived_stats["cooldown_reduction"] = (
-		get_total_attribute("haste") * 0.85 +
-		get_total_attribute("instinct") * 0.10 +
-		get_total_attribute("wisdom") * 0.05
-	)
-
-	derived_stats["climb_speed"] = 1.0 + get_total_attribute("dexterity") * 0.20 + get_total_attribute("strength") * 0.80
-	derived_stats["swim_speed"] = 1.0 + get_total_attribute("strength") * 0.55 + get_total_attribute("agility") * 0.45
-
-	derived_stats["run_speed"] = 16.0 * (get_total_attribute("haste") + get_total_attribute("agility") * 0.45)
-
-	derived_stats["fall_resistance"] = get_total_attribute("toughness") * 0.75 + get_total_attribute("agility") * 0.25
-
-	derived_stats["turn_speed"] = 4.0 + get_total_attribute("agility")
-	derived_stats["atk_turn_speed"] = 0.15 + get_total_attribute("agility") * 0.3
-	derived_stats["dash_turn_speed"] = 7.0 + get_total_attribute("agility") * 3.0
-
-	derived_stats["jump_power"] = 1.0 + get_total_attribute("power") * 3.6 + get_total_attribute("agility") * 3.6
-
-	derived_stats["crit_chance"] = 0.05 + get_total_attribute("instinct") * 0.02
-	derived_stats["penetrating_hit_chance"] = 0.05 + get_total_attribute("wisdom") * 0.02
-	derived_stats["penetration_power"] = 0.1 * get_total_attribute("power") * 0.25 + get_total_attribute("strength") * 0.25
-	derived_stats["crit_damage"] = 2.0 + get_total_attribute("power") * 0.05
-
-	derived_stats["detection_range"] = 10.0 + get_total_attribute("perception") * 2.0
-	derived_stats["energy_regeneration"] = 1.0 + get_total_attribute("toughness") * 0.2
-	derived_stats["health_regeneration"] = 1.0 + get_total_attribute("vitality")
-	derived_stats["threat"] = get_total_attribute("authority")
-
-	health = min(health, max_health)
-	arcane = min(arcane, max_arcane)
-
-	updateCombatAttributes()
-	
-func get_total_attribute(name:String)->float:
-	return attributes.get(name,1.0)+equipment_attributes.get(name,0.0)
-func updateCombatAttributes():
-	var strength_total=get_total_attribute("strength")
-	var power_total=get_total_attribute("power")
-	var toughness_total=get_total_attribute("toughness")
-
-	var strength_bonus=strength_total-1.0
-	var power_bonus=power_total-1.0
-	var toughness_bonus=(toughness_total-1.0)*50.0
-
-	slash_defence=defences[damage_type.slash]+toughness_bonus+equipment_defence_bonus[damage_type.slash]
-	blunt_defence=defences[damage_type.blunt]+toughness_bonus+equipment_defence_bonus[damage_type.blunt]
-	pierce_defence=defences[damage_type.pierce]+toughness_bonus+equipment_defence_bonus[damage_type.pierce]
-	sonic_defence=defences[damage_type.sonic]+toughness_bonus+equipment_defence_bonus[damage_type.sonic]
-	heat_defence=defences[damage_type.heat]+toughness_bonus+equipment_defence_bonus[damage_type.heat]
-	cold_defence=defences[damage_type.cold]+toughness_bonus+equipment_defence_bonus[damage_type.cold]
-	jolt_defence=defences[damage_type.jolt]+toughness_bonus+equipment_defence_bonus[damage_type.jolt]
-	toxic_defence=defences[damage_type.toxic]+toughness_bonus+equipment_defence_bonus[damage_type.toxic]
-	acid_defence=defences[damage_type.acid]+toughness_bonus+equipment_defence_bonus[damage_type.acid]
-	arcane_defence=defences[damage_type.arcane]+toughness_bonus+equipment_defence_bonus[damage_type.arcane]
-	bleed_defence=defences[damage_type.bleed]+toughness_bonus+equipment_defence_bonus[damage_type.bleed]
-	radiant_defence=defences[damage_type.radiant]+toughness_bonus+equipment_defence_bonus[damage_type.radiant]
-
-	slash_multiplier=1.0+strength_bonus+equipment_damage_bonus[damage_type.slash]
-	blunt_multiplier=1.0+strength_bonus+equipment_damage_bonus[damage_type.blunt]
-	pierce_multiplier=1.0+strength_bonus+equipment_damage_bonus[damage_type.pierce]
-	bleed_multiplier=1.0+strength_bonus+equipment_damage_bonus[damage_type.bleed]
-
-	sonic_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.sonic]
-	heat_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.heat]
-	cold_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.cold]
-	jolt_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.jolt]
-	toxic_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.toxic]
-	acid_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.acid]
-	arcane_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.arcane]
-	radiant_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.radiant]
-
-
 var selected_attribute := "vitality"
 var equipment_damage_bonus={
 	damage_type.slash:0.0,
@@ -295,55 +205,6 @@ var equipment_attributes={
 	"haste":0.0,
 	"charisma":0.0,
 	"authority":0.0
-}
-
-func _physics_process(delta): 
-	updateAttributes()
-	rebuildOnHitEffects()
-	updateStatuses(delta)
-	if Input.is_action_just_pressed("debug_attributes"):
-		var uistats = $"../UI/Equipment/UIStats"
-		if is_instance_valid(uistats):
-			uistats.updateUI()
-		increaseAttribute(selected_attribute)
-		updateAttributes()
-		var label = $"../Label"
-		if is_instance_valid(label):
-			label.text = (
-		selected_attribute
-		+ ": "
-		+ str(stepify(attributes[selected_attribute], 0.01))
-	)
-	if Input.is_action_pressed("give_att"):
-		var uistats = $"../UI/Equipment/UIStats"
-		if is_instance_valid(uistats):
-			uistats.updateUI()
-		available_attribute_points += 10
-		updateAttributes()
-		energy += max_energy/2
-		acid_multiplier+=100.0
-		bleed_defence += 3
-		debugDamage()
-
-const ATTRIBUTE_STEP := 0.05
-const MIN_ATTRIBUTE := 0.25
-
-
-
-var attribute_points_spent = {
-	"strength": 0,
-	"power": 0,
-	"agility": 0,
-	"dexterity": 0,
-	"vitality": 0,
-	"toughness": 0,
-	"instinct": 0,
-	"perception": 0,
-	"intelligence": 0,
-	"wisdom": 0,
-	"haste": 0,
-	"charisma": 0,
-	"authority": 0
 }
 func getAttributeValue(points:int) -> float:
 	var value = 1.0
@@ -412,6 +273,58 @@ func decreaseAttribute(attribute_name:String) -> void:
 
 	updateAttributes()
 
+
+func _physics_process(delta): 
+	updateAttributes()
+	rebuildOnHitEffects()
+	updateStatuses(delta)
+	if not parent.is_in_combat:
+			health = regenerate(derived_stats["health_regeneration"],health,max_health)
+			energy = regenerate(derived_stats["energy_regeneration"],energy,max_energy)
+	if Input.is_action_just_pressed("debug_attributes"):
+		var uistats = $"../UI/Equipment/UIStats"
+		if is_instance_valid(uistats):
+			uistats.updateUI()
+		increaseAttribute(selected_attribute)
+		updateAttributes()
+		var label = $"../Label"
+		if is_instance_valid(label):
+			label.text = (
+		selected_attribute
+		+ ": "
+		+ str(stepify(attributes[selected_attribute], 0.01))
+	)
+	if Input.is_action_pressed("give_att"):
+		var uistats = $"../UI/Equipment/UIStats"
+		if is_instance_valid(uistats):
+			uistats.updateUI()
+		available_attribute_points += 10
+		updateAttributes()
+		energy += max_energy/2
+		acid_multiplier+=100.0
+		bleed_defence += 3
+		debugDamage()
+
+const ATTRIBUTE_STEP := 0.05
+const MIN_ATTRIBUTE := 0.25
+
+
+
+var attribute_points_spent = {
+	"strength": 0,
+	"power": 0,
+	"agility": 0,
+	"dexterity": 0,
+	"vitality": 0,
+	"toughness": 0,
+	"instinct": 0,
+	"perception": 0,
+	"intelligence": 0,
+	"wisdom": 0,
+	"haste": 0,
+	"charisma": 0,
+	"authority": 0
+}
 
 var weapon_damages = {
 	damage_type.slash: 100,
@@ -488,13 +401,13 @@ onready var mob_status_grid:GridContainer=$"../UI/CrossairInspect/MobStatusGrid"
 onready var player_status_grid:GridContainer=$"../UI/Menu/CharacterBar/PlayerStatusGrid"
 onready var player_example_icon:TextureRect = $"../UI/Menu/CharacterBar/PlayerStatusGrid/Icon1"
 onready var mob_example_icon:TextureRect = $"../UI/CrossairInspect/GridContainer/Icon1"
-func updateStatusUI():
-	_updateStatusGrid(player_status_grid, self)
-func _updateStatusGrid(grid:GridContainer, source)->void:
+
+
+func updateStatusGrid(grid:GridContainer, source)->void:
 	if grid == null or source == null:
 		return
 
-	var template := grid.get_node("Icon1")
+	var template:TextureRect = grid.get_node("Icon1")
 
 	for child in grid.get_children():
 		if child != template:
@@ -504,7 +417,7 @@ func _updateStatusGrid(grid:GridContainer, source)->void:
 
 	for status_name in source.statuses.keys():
 
-		if !PlayerSkills.status_icons.has(status_name):
+		if !Skills.status_icons.has(status_name):
 			continue
 
 		var s = source.statuses[status_name]
@@ -514,25 +427,45 @@ func _updateStatusGrid(grid:GridContainer, source)->void:
 				var icon = template.duplicate()
 				icon.visible = true
 				icon.name = "Icon_" + status_name
-				icon.texture = PlayerSkills.status_icons[status_name]
+				icon.texture = Skills.status_icons[status_name]
 
 				var label = icon.get_node("Label")
 				if label:
 					label.text = str(int(ceil(entry["duration"])))
+
+				var stack_label = icon.get_node("Stack")
+				if stack_label:
+					var stacks = int(entry.get("stacks",1))
+					stack_label.text = "" if stacks <= 1 else str(stacks)
 
 				grid.add_child(icon)
 		else:
 			var icon = template.duplicate()
 			icon.visible = true
 			icon.name = "Icon_" + status_name
-			icon.texture = PlayerSkills.status_icons[status_name]
+			icon.texture = Skills.status_icons[status_name]
 
 			var label = icon.get_node("Label")
 			if label:
 				label.text = str(int(ceil(s["duration"])))
 
+			var stack_label = icon.get_node("Stack")
+			if stack_label:
+				var stacks = int(s.get("stacks",1))
+				stack_label.text = "" if stacks <= 1 else str(stacks)
+
 			grid.add_child(icon)
+
+
+			
 func _process(delta):
+	if Input.is_action_just_pressed("7"):
+		if parent.is_in_group("Player"):
+			parent.current_skill = "base attack"
+			for status_name in Skills.status_effects[parent.current_skill]:
+					parent.get_node("Stats").applyStatus(status_name,parent,parent.current_skill)
+	
+	
 	if is_instance_valid($"../StatusesLabel"):
 		var label =  $"../StatusesLabel"
 
@@ -544,196 +477,404 @@ func _process(delta):
 
 		for status_name in statuses.keys():
 			var s = statuses[status_name]
-			text += status_name + " (" + str(ceil(s["duration"])) + ")\n"
 
+			if typeof(s) == TYPE_ARRAY:
+				for entry in s:
+					if typeof(entry) != TYPE_DICTIONARY:
+						continue
+					text += status_name + " (" + str(ceil(entry.get("duration", 0.0))) + ")\n"
+			else:
+				text += status_name + " (" + str(ceil(s.get("duration", 0.0))) + ")\n"
 		label.text = text.strip_edges()
 var statuses = {}
-var StatusDB = {
-	"bleed": {
-		"base_tick_damage": 2.0,
-		"duration": 5.0,
-		"can_stack": true,
-		"bleed_multiplier": true
-	},
-
-	"stun": {
-		"disable_actions": true,
-		"duration": 2.0,
-		"can_stack": false
-	},
-
-	"slow": {
-		"agility_mult": 0.5,
-		"duration": 3.0,
-		"can_stack": false
-	},
-
-	"armor_break": {
-		"defense_mult": 0.7,
-		"duration": 4.0,
-		"can_stack": false
-	}
-}
-
-func applyStatus(status_name:String, applier:Node = null,current_skill:String = "")->void:
-	if !StatusDB.has(status_name):
+func applyStatus(status_name:String, applier:Node = null, current_skill:String = "")->void:
+	if !Skills.status_effects.has(current_skill):
+		return
+	if !Skills.status_effects[current_skill].has(status_name):
 		return
 
-	var data = StatusDB[status_name]
-	var stackable = data.get("can_stack", false)
+	var data = Skills.status_effects[current_skill][status_name]
 
-	var final_duration = data.get("duration", 0.0)
-	var tick_damage = data.get("tick_damage", 0.0)
+	var stackable:bool = data.get("can_stack", false)
+	var final_duration:float = data.get("duration", 0.0)
+	var tick_damage:float = data.get("base_damage", 0.0)
+	var affects:Array = data.get("affects", [])
+	var tick_interval:float = data.get("tick_timer", 1.0)
 
-	if status_name == "bleed":
-		var bleed = getBleedData(current_skill)
+	var applier_name:String = ""
+	if applier != null and is_instance_valid(applier):
+		applier_name = applier.name
 
-		final_duration = bleed["duration"]
-		tick_damage = bleed["tick_damage"]
-		stackable = bleed["can_stack"]
+	if !stackable:
+		if statuses.has(status_name):
+			var s = statuses[status_name]
+			if typeof(s) == TYPE_DICTIONARY:
+				s["duration"] = max(s.get("duration", 0.0), final_duration)
+				return
+			else:
+				statuses.erase(status_name)
 
-	if !stackable and statuses.has(status_name):
-		statuses[status_name]["duration"] = max(
-			statuses[status_name]["duration"],
-			final_duration
-		)
-		updateStatusUI()
-		return
-
-	if stackable:
-		if !statuses.has(status_name):
-			statuses[status_name] = []
-
-		statuses[status_name].append({
-			"duration": final_duration,
-			"tick_timer": 1.0,
-			"applier": applier,
-			"tick_damage": tick_damage
-		})
-	else:
 		statuses[status_name] = {
 			"duration": final_duration,
-			"tick_timer": 1.0,
-			"applier": applier,
-			"tick_damage": tick_damage
+			"tick_timer": tick_interval,
+			"tick_interval": tick_interval,
+			"skill": current_skill,
+			"applier_name": applier_name,
+			"tick_damage": tick_damage,
+			"power": data.get("power", 0.0),
+			"affects": affects,
+			"stacks": 1
 		}
-
-	_applyStatusEffects(status_name, applier)
-	updateStatusUI()
-func getBleedData(skill:String)->Dictionary:
-
-	if !PlayerSkills.status_debuffs.has(skill):
-		return {
-			"tick_damage":2.0,
-			"duration":3.0,
-			"can_stack":false
-		}
-
-	var bleed = PlayerSkills.status_debuffs[skill]["bleed"]
-
-	return {
-		"tick_damage":bleed["base_damage"] * bleed_multiplier,
-		"duration":bleed["duration"],
-		"can_stack":bleed["can_stack"]
-	}
-func _applyStatusEffects(status_name:String, applier:Node)->void:
-	if !StatusDB.has(status_name):
 		return
 
-	var data = StatusDB[status_name]
+	if !statuses.has(status_name):
+		statuses[status_name] = []
+	elif typeof(statuses[status_name]) != TYPE_ARRAY:
+		var old = statuses[status_name]
+		statuses[status_name] = []
+		if typeof(old) == TYPE_DICTIONARY:
+			statuses[status_name].append(old)
 
-	match status_name:
-		"stun":
-			get_parent().anim_locks["stunned"] = true
+	var list = statuses[status_name]
+	var merged := false
 
-			if applier != null and applier.has_node("Stats") and parent.has_method("get_or_create_aggro_target"):
-				var inst = parent.get_or_create_aggro_target(applier)
-				inst.aggro += applier.stats.derived_stats["threat"]
+	for i in range(list.size()):
+		var entry = list[i]
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
 
-		"slow":
-			if derived_stats.has("agility_mult"):
-				derived_stats["agility_mult"] *= data["agility_mult"]
+		if entry.get("applier_name", "") == applier_name and entry.get("skill","") == current_skill:
+			var new_stacks = int(entry.get("stacks", 1)) + 1
 
-		"armor_break":
-			if derived_stats.has("defense_mult"):
-				derived_stats["defense_mult"] *= data["defense_mult"]
-	updateStatusUI()
+			if data.has("max_stacks"):
+				new_stacks = min(new_stacks, int(data["max_stacks"]))
+
+			entry["stacks"] = new_stacks
+			entry["duration"] = max(entry.get("duration", 0.0), final_duration)
+			entry["tick_damage"] = tick_damage * entry["stacks"]
+			entry["power"] = data.get("power", 0.0) * entry["stacks"]
+			entry["affects"] = affects
+
+			merged = true
+			break
+
+	if !merged:
+		list.append({
+			"duration": final_duration,
+			"tick_timer": tick_interval,
+			"tick_interval": tick_interval,
+			"skill": current_skill,
+			"applier_name": applier_name,
+			"tick_damage": tick_damage,
+			"power": data.get("power", 0.0),
+			"affects": affects,
+			"stacks": 1
+		})
+
 
 func updateStatuses(delta:float)->void:
-	var to_remove = []
+	var statuses_to_remove=[]
 
 	for status_name in statuses.keys():
-		var s = statuses[status_name]
+		var status_data=statuses[status_name]
 
-		# STACKED STATUS (Array)
-		if typeof(s) == TYPE_ARRAY:
-			for i in range(s.size() - 1, -1, -1):
-				var entry = s[i]
+		if typeof(status_data)==TYPE_ARRAY:
+			for i in range(status_data.size()-1,-1,-1):
+				var entry=status_data[i]
+				if typeof(entry)!=TYPE_DICTIONARY:
+					continue
 
-				entry["duration"] -= delta
-				entry["tick_timer"] -= delta
+				entry["duration"]-=delta
+				entry["tick_timer"]-=delta
 
-				if entry["tick_timer"] <= 0.0:
-					getHit(entry.get("applier", self), {damage_type.bleed: entry["tick_damage"]}, false, 0.0, false)
-					entry["tick_timer"] = 1.0
+				var applier=entry.get("applier",null)
+				var power=float(entry.get("power",0.0))
+				var tick_interval=float(entry.get("tick_interval",1.0))
 
-				if entry["duration"] <= 0.0:
-					s.remove(i)
+				if status_name=="bleed" and entry["tick_timer"]<=0.0:
+					getHit(applier if applier!=null else self,{damage_type.bleed:entry.get("tick_damage",power)},false,0.0,false)
+					entry["tick_timer"]=tick_interval
 
-			if s.size() == 0:
-				to_remove.append(status_name)
+				elif status_name.begins_with("heal") and entry["tick_timer"]<=0.0:
+					getHeal(applier if applier!=null else self,power)
+					entry["tick_timer"]=tick_interval
 
-		# SINGLE STATUS (Dictionary)
+				if entry["duration"]<=0.0:
+					status_data.remove(i)
+
+			if status_data.size()==0:
+				statuses_to_remove.append(status_name)
+
 		else:
-			var applier = s.get("applier", null)
+			var entry=status_data
 
-			s["duration"] -= delta
-			s["tick_timer"] -= delta
+			if typeof(entry)!=TYPE_DICTIONARY:
+				statuses_to_remove.append(status_name)
+				continue
 
-			if status_name == "bleed" and s["tick_timer"] <= 0.0:
-				getHit(applier if applier != null else self, {damage_type.bleed: s["tick_damage"]}, false, 0.0, false)
-				s["tick_timer"] = 1.0
+			entry["duration"]-=delta
+			entry["tick_timer"]-=delta
 
-			if s["duration"] <= 0.0:
-				to_remove.append(status_name)
+			var applier=entry.get("applier",null)
+			var power=float(entry.get("power",0.0))
+			var tick_interval=float(entry.get("tick_interval",1.0))
 
-	for r in to_remove:
-		_removeStatus(r)
+			if status_name=="bleed" and entry["tick_timer"]<=0.0:
+				getHit(applier if applier!=null else self,{damage_type.bleed:entry.get("tick_damage",power)},false,0.0,false)
+				entry["tick_timer"]=tick_interval
 
-	updateStatusUI()
-	
-	
-	
-	
-func _removeStatus(status_name:String)->void:
+			elif status_name.begins_with("heal") and entry["tick_timer"]<=0.0:
+				getHeal(applier if applier!=null else self,power)
+				entry["tick_timer"]=tick_interval
+
+			if entry["duration"]<=0.0:
+				statuses_to_remove.append(status_name)
+
+	for status_name in statuses_to_remove:
+		removeStatus(status_name)
+
+	updateStatusGrid(player_status_grid,self)
+
+func removeStatus(status_name:String)->void:
 	if !statuses.has(status_name):
 		return
 
-	# reverse effects if needed
-	match status_name:
-		"stun":
-			if parent.has_method("setAnimLock"):
-				parent.setAnimLock("stunned", false)
-				parent.setAnimLock("staggered", false)
-				parent.anim_locks["stunned"] = false
-				parent.anim_locks["staggered"] = false
-
-				parent.unlockAnim()
-
-		"slow":
-			pass # no need if multiplicative stats used
-
-		"armor_break":
-			pass
+	if status_name == "stun":
+		if parent.has_method("setAnimLock"):
+			parent.setAnimLock("stunned", false)
+			parent.setAnimLock("staggered", false)
+			parent.anim_locks["stunned"] = false
+			parent.anim_locks["staggered"] = false
+			parent.unlockAnim()
 
 	statuses.erase(status_name)
-	updateStatusUI()
+	updateStatusGrid(player_status_grid, self)
+	
+	
+	
+func getTotalAttribute(name:String)->float:
+	var base = attributes.get(name,1.0) + equipment_attributes.get(name,0.0)
+
+	if name == "agility" and statuses.has("slow"):
+		var slow_total := 0.0
+
+		var s = statuses["slow"]
+		if typeof(s) == TYPE_ARRAY:
+			for e in s:
+				slow_total += float(e.get("power", 0.0))
+		else:
+			slow_total = float(s.get("power", 0.0))
+
+		var mult = 1.0 - slow_total
+		if mult < 0.01:
+			mult = 0.01
+
+		return base * mult
+
+	return base
 
 
 
 
 
 
+
+
+func updateAttributes():
+	max_arcane = 100 + getTotalAttribute("wisdom") * 10
+	max_health = base_max_health +getTotalAttribute("vitality") * 20
+	walk_speed = base_walk_speed + getTotalAttribute("agility") * 0.2
+	run_speed = base_run_speed + getTotalAttribute("agility") * 0.4
+
+	for k in defences:
+		defences[k] = getTotalAttribute("toughness") * 2.0
+
+	derived_stats["attack_speed"] = getTotalAttribute("dexterity")
+
+	derived_stats["cooldown_reduction"] = (getTotalAttribute("haste") * 0.85 +getTotalAttribute("instinct") * 0.10 +getTotalAttribute("wisdom") * 0.05)
+
+	derived_stats["climb_speed"] = 1.0 + getTotalAttribute("dexterity") * 0.20 + getTotalAttribute("strength") * 0.80
+	derived_stats["swim_speed"] = 1.0 + getTotalAttribute("strength") * 0.55 + getTotalAttribute("agility") * 0.45
+
+	derived_stats["run_speed"] = 16.0 * (getTotalAttribute("haste") + getTotalAttribute("agility") * 0.45)
+
+	derived_stats["fall_resistance"] = getTotalAttribute("toughness") * 0.75 + getTotalAttribute("agility") * 0.25
+
+	derived_stats["turn_speed"] = 4.0 + getTotalAttribute("agility")
+	derived_stats["atk_turn_speed"] = 0.15 + getTotalAttribute("agility") * 0.3
+	derived_stats["dash_turn_speed"] = 7.0 + getTotalAttribute("agility") * 3.0
+
+	derived_stats["jump_power"] = 1.0 + getTotalAttribute("power") * 3.6 + getTotalAttribute("agility") * 3.6
+
+	derived_stats["crit_chance"] = 0.05 + getTotalAttribute("instinct") * 0.02
+	derived_stats["penetrating_hit_chance"] = 0.05 + getTotalAttribute("wisdom") * 0.02
+	derived_stats["penetration_power"] = 0.1 * getTotalAttribute("power") * 0.25 + getTotalAttribute("strength") * 0.25
+	derived_stats["crit_damage"] = 2.0 + getTotalAttribute("power") * 0.05
+
+	derived_stats["detection_range"] = 10.0 + getTotalAttribute("perception") * 2.0
+	derived_stats["energy_regeneration"] = 1.0 + getTotalAttribute("toughness") 
+	derived_stats["health_regeneration"] = 0 + (getTotalAttribute("vitality") * 0.1)
+	derived_stats["threat"] = getTotalAttribute("authority")
+
+	health = min(health, max_health)
+	arcane = min(arcane, max_arcane)
+
+	updateCombatAttributes()
+	
+	var slow :float = 1.0
+
+	if statuses.has("slow"):
+		var s = statuses["slow"]
+		var power :float = 0.0
+
+		if typeof(s) == TYPE_ARRAY:
+			for e in s:
+				power += float(e.get("power", 0.0))
+		else:
+			power = float(s.get("power", 0.0))
+
+		slow = clamp(1.0 - power, 0.01, 1.0)
+
+	walk_speed *= slow
+	run_speed *= slow
+	derived_stats["run_speed"] *= slow
+	derived_stats["swim_speed"] *= slow
+	derived_stats["climb_speed"] *= slow
+
+
+
+func updateCombatAttributes():
+	var toughness_total=getTotalAttribute("toughness")
+	var toughness_bonus=(toughness_total-1.0)*50.0
+	# 1. base values
+	var base_slash = defences[damage_type.slash] + toughness_bonus + equipment_defence_bonus[damage_type.slash]
+	var base_blunt = defences[damage_type.blunt] + toughness_bonus + equipment_defence_bonus[damage_type.blunt]
+	var base_pierce = defences[damage_type.pierce] + toughness_bonus + equipment_defence_bonus[damage_type.pierce]
+	var base_sonic = defences[damage_type.sonic] + toughness_bonus + equipment_defence_bonus[damage_type.sonic]
+	var base_heat = defences[damage_type.heat] + toughness_bonus + equipment_defence_bonus[damage_type.heat]
+	var base_cold = defences[damage_type.cold] + toughness_bonus + equipment_defence_bonus[damage_type.cold]
+	var base_jolt = defences[damage_type.jolt] + toughness_bonus + equipment_defence_bonus[damage_type.jolt]
+	var base_toxic = defences[damage_type.toxic] + toughness_bonus + equipment_defence_bonus[damage_type.toxic]
+	var base_acid = defences[damage_type.acid] + toughness_bonus + equipment_defence_bonus[damage_type.acid]
+	var base_arcane = defences[damage_type.arcane] + toughness_bonus + equipment_defence_bonus[damage_type.arcane]
+	var base_bleed = defences[damage_type.bleed] + toughness_bonus + equipment_defence_bonus[damage_type.bleed]
+	var base_radiant = defences[damage_type.radiant] + toughness_bonus + equipment_defence_bonus[damage_type.radiant]
+
+	# 2. apply armor_break (multiplicative, fully safe)
+	if statuses.has("armor_break") and typeof(statuses["armor_break"]) == TYPE_ARRAY:
+
+		var armor_break_instances = statuses["armor_break"]
+		var armor_break_power = 0.0
+		var affects = []
+
+		for entry in armor_break_instances:
+
+			if typeof(entry) != TYPE_DICTIONARY:
+				continue
+
+			armor_break_power += float(entry.get("power", 0.0))
+
+			if affects.size() == 0:
+				var a = entry.get("affects", [])
+				if typeof(a) == TYPE_ARRAY:
+					affects = a
+
+		armor_break_power = clamp(armor_break_power, 0.0, 1.0)
+
+		for stat in affects:
+			match stat:
+				"slash_defence": base_slash *= (1.0 - armor_break_power)
+				"blunt_defence": base_blunt *= (1.0 - armor_break_power)
+				"pierce_defence": base_pierce *= (1.0 - armor_break_power)
+				"sonic_defence": base_sonic *= (1.0 - armor_break_power)
+				"heat_defence": base_heat *= (1.0 - armor_break_power)
+				"cold_defence": base_cold *= (1.0 - armor_break_power)
+				"jolt_defence": base_jolt *= (1.0 - armor_break_power)
+				"toxic_defence": base_toxic *= (1.0 - armor_break_power)
+				"acid_defence": base_acid *= (1.0 - armor_break_power)
+				"arcane_defence": base_arcane *= (1.0 - armor_break_power)
+				"bleed_defence": base_bleed *= (1.0 - armor_break_power)
+				"radiant_defence": base_radiant *= (1.0 - armor_break_power)
+
+
+	# 3. apply decrease_armor (flat, fully safe)
+	if statuses.has("decrease_armor") and typeof(statuses["decrease_armor"]) == TYPE_ARRAY:
+
+		var decrease_instances = statuses["decrease_armor"]
+		var decrease_amount = 0.0
+		var affects = []
+
+		for entry in decrease_instances:
+
+			if typeof(entry) != TYPE_DICTIONARY:
+				continue
+
+			decrease_amount += float(entry.get("power", 0.0))
+
+			if affects.size() == 0:
+				var a = entry.get("affects", [])
+				if typeof(a) == TYPE_ARRAY:
+					affects = a
+
+		for stat in affects:
+			match stat:
+				"cold_defence":
+					base_cold = max(base_cold - decrease_amount, 0.0)
+
+	# 4. assign final values
+	slash_defence = base_slash
+	blunt_defence = base_blunt
+	pierce_defence = base_pierce
+	sonic_defence = base_sonic
+	heat_defence = base_heat
+	cold_defence = base_cold
+	jolt_defence = base_jolt
+	toxic_defence = base_toxic
+	acid_defence = base_acid
+	arcane_defence = base_arcane
+	bleed_defence = base_bleed
+	radiant_defence = base_radiant
+	
+	
+	var strength_total=getTotalAttribute("strength")
+	var power_total=getTotalAttribute("power")
+	
+
+	var strength_bonus=strength_total-1.0
+	var power_bonus=power_total-1.0
+	
+	slash_multiplier=1.0+strength_bonus+equipment_damage_bonus[damage_type.slash]
+	blunt_multiplier=1.0+strength_bonus+equipment_damage_bonus[damage_type.blunt]
+	pierce_multiplier=1.0+strength_bonus+equipment_damage_bonus[damage_type.pierce]
+	bleed_multiplier=1.0+strength_bonus+equipment_damage_bonus[damage_type.bleed]
+
+	sonic_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.sonic]
+	heat_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.heat]
+	cold_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.cold]
+	jolt_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.jolt]
+	toxic_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.toxic]
+	acid_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.acid]
+	arcane_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.arcane]
+	radiant_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.radiant]
+
+
+
+	
+func getBleedData(skill:String)->Dictionary:
+
+	if !Skills.status_effects.has(skill):
+		return {"tick_damage":0.0,"duration":0.0,"can_stack":false}
+
+	if !Skills.status_effects[skill].has("bleed"):
+		return {"tick_damage":0.0,"duration":0.0,"can_stack":false}
+
+	var bleed = Skills.status_effects[skill]["bleed"]
+
+	return {
+		"tick_damage":bleed.get("base_damage",0.0) * bleed_multiplier,
+		"duration":bleed.get("duration",0.0),
+		"can_stack":bleed.get("can_stack",false)
+	}
 
 
 
@@ -762,12 +903,12 @@ func getSkillLevel(skill_name:String) -> int:
 
 		var texture_path = slot.texture.resource_path
 
-		for skill in PlayerSkills.skills:
+		for skill in Skills.skills:
 
-			if PlayerSkills.skills[skill] == null:
+			if Skills.skills[skill] == null:
 				continue
 
-			if PlayerSkills.skills[skill].resource_path != texture_path:
+			if Skills.skills[skill].resource_path != texture_path:
 				continue
 
 			if skill != skill_name:
@@ -782,7 +923,7 @@ func getSkillLevel(skill_name:String) -> int:
 
 
 func getSkillLevelMultiplier(skill_name:String) -> float:
-	return PlayerSkills.getDamageMultiplier(
+	return Skills.getDamageMultiplier(
 		skill_name,
 		max(0,getSkillLevel(skill_name)-1)
 	)
@@ -831,7 +972,7 @@ func rebuildOnHitEffects()->void:
 		
 		
 func dealDamage():
-	var area = null
+	var area:Area = null
 
 	if parent.is_in_group("Player") or parent.is_in_group("player"):
 		area = $"../character/root/Skeleton/WeaponR/Short"
@@ -843,14 +984,14 @@ func dealDamage():
 
 	var damages = {}
 
-	var skill_name = ""
-	var skill_level_mult = 1.0
+	var skill_name:String = ""
+	var skill_level_mult:float = 1.0
 
 	if parent.is_in_group("Player") or parent.is_in_group("player"):
 		skill_name = parent.current_skill
 		skill_level_mult = getSkillLevelMultiplier(skill_name)
 
-		var skill_damages = PlayerSkills.getDamages(skill_name)
+		var skill_damages = Skills.getDamages(skill_name)
 
 		for dmg_type in skill_damages:
 
@@ -897,7 +1038,7 @@ func dealDamage():
 		for dmg_type in damages:
 			damages[dmg_type] *= my_stats.derived_stats["crit_damage"]
 
-	var total_damage := 0.0
+	var total_damage:float= 0.0
 	for v in damages.values():
 		total_damage += v
 
@@ -917,16 +1058,17 @@ func dealDamage():
 			continue
 
 		if body.has_node("Stats"):
-			body.get_node("Stats").getHit(parent, damages, is_penetrating_hit, 0.0, is_crit)
-			body.get_node("Stats").applyStatus("bleed", parent,skill_name)
+			other_stats.getHit(parent, damages, is_penetrating_hit, 0.0, is_crit)
+			for status_name in Skills.status_effects[skill_name]:
+				other_stats.applyStatus(status_name,parent,skill_name)
 			var skillbar = $"../UI/Skillbar"
 			if parent.is_in_group("Player") or parent.is_in_group("player"):
-				PlayerSkills.applyOnHitEffects(skill_name,active_on_hit_effects,skillbar.active_cooldowns,my_stats,total_damage)
-
+				Skills.applyOnHitEffects(skill_name,active_on_hit_effects,skillbar.active_cooldowns,my_stats,total_damage)
 
 
 
 func getHit(attacker:Node,damages:Dictionary,is_penetrating_hit:bool,extra_threat:float,is_crit:bool=false)->void:
+	parent.is_in_combat == true
 	var total_damage:=0.0
 	var final_damages={}
 
@@ -961,17 +1103,18 @@ func getHit(attacker:Node,damages:Dictionary,is_penetrating_hit:bool,extra_threa
 		total_damage+=final_damage
 
 	if !(parent.is_in_group("Player") or parent.is_in_group("player")):
-
-		var instigatorAggro=parent.get_or_create_aggro_target(attacker)
-		instigatorAggro.aggro+=((total_damage*attacker.stats.derived_stats["threat"]))
+		if attacker != null:
+			if attacker.is_in_group("Entity"):
+				var instigatorAggro=parent.get_or_create_aggro_target(attacker)
+				instigatorAggro.aggro+=((total_damage*attacker.stats.derived_stats["threat"]))
 
 	health-=total_damage
-
-	if parent.stats.health>0:
-		if attacker!=parent:
+	
+	if attacker != null and attacker.is_in_group("Entity"):
+		if parent.stats.health>0:
 			attacker.stored_body=parent
-	else:
-		attacker.stored_body=null
+		else:
+			attacker.stored_body=null
 
 	if is_instance_valid($"../UI/Menu/CharacterBar"):
 		$"../UI/Menu/CharacterBar".updateBars()
@@ -979,72 +1122,78 @@ func getHit(attacker:Node,damages:Dictionary,is_penetrating_hit:bool,extra_threa
 	spawnDamageText(final_damages,is_crit,is_penetrating_hit)
 
 
+func getHeal(source:Node, heal_amount:float)->void:
+	var total_heal:float = heal_amount
+	if source != null and source.is_in_group("Entity") and source.has_node("Stats"):
+		var vitality = getTotalAttribute("vitality")
+		total_heal *= 1.0 + (vitality * 0.05)
+
+	health += total_heal
+
+	if health > max_health:
+		health = max_health
+
+	if is_instance_valid($"../UI/Menu/CharacterBar"):
+		$"../UI/Menu/CharacterBar".updateBars()
+
+	spawnHealText({ "heal": total_heal })
 
 
 
 
-
-
-
-func debugDamage(amount: float = 10.0) -> void:
-
-	var damages = {damage_type.bleed: amount}
-	if parent.is_in_group("Player"):
-		getHit(
-			parent,
-			damages,
-			false,
-			0.0,
-			false
-		)
-
-func spawnDamageText(
-	damages: Dictionary,
-	is_crit: bool = false,
-	is_penetrating_hit: bool = false
-) -> void:
-
+func spawnDamageText(damages: Dictionary,is_crit: bool = false,is_penetrating_hit: bool = false) -> void:
 	var text := ""
-
 	if is_crit:
 		text += "CRITICAL!\n"
-
 	if is_penetrating_hit:
 		text += "PENETRATING!\n"
-
 	for dmg_type in damages:
-		text += (
-			str(round(damages[dmg_type]))
-			+ " "
-			+ damageTypeToString(dmg_type)
-			+ "\n"
-		)
+		text += (str(round(damages[dmg_type]))+ " "+ damageTypeToString(dmg_type)+ "\n")
+	var floating_res = CommonBehaviours.FloatingResScene.instance()
+	floating_res.text = text.strip_edges()
+	# Player got hit
+	if parent.is_in_group("Player") or parent.is_in_group("player"):
+		floating_res.use_screen_center = false
+		var menu =  $"../UI/Menu/CharacterBar/Control"
+		if is_instance_valid(menu):
+			menu.add_child(floating_res)
+			return
+	# Mob got hit
+	floating_res.use_screen_center = false
+	var camera = get_viewport().get_camera()
+	if camera:
+		floating_res.world_position = camera.unproject_position(parent.global_transform.origin + Vector3.UP * 2.0)
+	get_tree().root.add_child(floating_res)
+
+func spawnHealText(heals: Dictionary) -> void:
+	var text := "HEAL\n"
+
+	for k in heals:
+		text += str(int(round(heals[k]))) + "\n"
 
 	var floating_res = CommonBehaviours.FloatingResScene.instance()
 	floating_res.text = text.strip_edges()
 
-	# Player got hit
 	if parent.is_in_group("Player") or parent.is_in_group("player"):
-
 		floating_res.use_screen_center = false
-
-		var menu =  $"../UI/Menu/CharacterBar/Control"
-
+		var menu = $"../UI/Menu/CharacterBar/Control"
 		if is_instance_valid(menu):
 			menu.add_child(floating_res)
 			return
 
-	# Mob got hit
 	floating_res.use_screen_center = false
-
 	var camera = get_viewport().get_camera()
-
 	if camera:
-		floating_res.world_position = camera.unproject_position(
-			parent.global_transform.origin + Vector3.UP * 2.0
-		)
+		floating_res.world_position = camera.unproject_position(parent.global_transform.origin + Vector3.UP * 2.0)
 
 	get_tree().root.add_child(floating_res)
+
+
+
+
+
+
+
 
 
 
@@ -1116,10 +1265,9 @@ func executeSpell() -> void:
 
 
 func getSkillArcaneCost(skill:String) -> float:
-
 	# Players
 	if owner.is_in_group("Player") or owner.is_in_group("player"):
-		return PlayerSkills.getArcaneCost(skill)
+		return Skills.getArcaneCost(skill)
 
 	# Mobs / NPCs
 	if owner.is_in_group("Entity"):
@@ -1150,3 +1298,78 @@ func consumeSkillArcane(skill:String) -> bool:
 func regenerate(value, resource, max_resource):
 	return min(resource + value, max_resource)
 		
+func serializeStatuses(statuses:Dictionary)->Dictionary:
+	var out = {}
+
+	for status_name in statuses.keys():
+		var s = statuses[status_name]
+
+		if typeof(s) == TYPE_ARRAY:
+			out[status_name] = []
+
+			for entry in s:
+				if typeof(entry) != TYPE_DICTIONARY:
+					continue
+
+				out[status_name].append({
+					"duration": entry.get("duration", 0.0),
+					"tick_timer": entry.get("tick_timer", 1.0),
+					"tick_damage": entry.get("tick_damage", 0.0),
+					"power": entry.get("power", 0.0),
+					"stacks": entry.get("stacks", 1)
+				})
+
+		elif typeof(s) == TYPE_DICTIONARY:
+			out[status_name] = {
+				"duration": s.get("duration", 0.0),
+				"tick_timer": s.get("tick_timer", 1.0),
+				"tick_damage": s.get("tick_damage", 0.0),
+				"power": s.get("power", 0.0),
+				"stacks": s.get("stacks", 1)
+			}
+
+	return out
+func deserializeStatuses(data:Dictionary)->Dictionary:
+	var out = {}
+
+	for status_name in data.keys():
+		var s = data[status_name]
+
+		if typeof(s) == TYPE_ARRAY:
+			out[status_name] = []
+
+			for entry in s:
+				if typeof(entry) != TYPE_DICTIONARY:
+					continue
+
+				out[status_name].append({
+					"duration": entry.get("duration", 0.0),
+					"tick_timer": entry.get("tick_timer", 1.0),
+					"applier": null,
+					"tick_damage": entry.get("tick_damage", 0.0),
+					"power": entry.get("power", 0.0),
+					"stacks": entry.get("stacks", 1)
+				})
+
+		elif typeof(s) == TYPE_DICTIONARY:
+			out[status_name] = {
+				"duration": s.get("duration", 0.0),
+				"tick_timer": s.get("tick_timer", 1.0),
+				"applier": null,
+				"tick_damage": s.get("tick_damage", 0.0),
+				"power": s.get("power", 0.0),
+				"stacks": s.get("stacks", 1)
+			}
+	return out
+
+func debugDamage(amount: float = 10.0) -> void:
+
+	var damages = {damage_type.bleed: amount}
+	if parent.is_in_group("Player"):
+		getHit(
+			parent,
+			damages,
+			false,
+			0.0,
+			false
+		)
