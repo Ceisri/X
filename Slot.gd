@@ -1,6 +1,7 @@
 extends TextureRect
 
 onready var player = $"../../../../.."
+onready var grid_container = $"../.."
 var savedTexture: Texture
 var savedQuantity: int
 
@@ -8,11 +9,10 @@ func _ready():
 	loadData()
 
 
-
-
 func saveData():
 	var parentName = get_parent().get_name()
-	var folderPath = "user://Characters/" + player.entity_name + "/"
+
+	var folderPath = "user://Characters/" + player.entity_name + "/" + grid_container.name + "/"
 	var savePath = folderPath + parentName + "_saved_texture_data.txt"
 
 	var dir = Directory.new()
@@ -22,12 +22,14 @@ func saveData():
 	var file = File.new()
 	if file.open(savePath, File.WRITE) != OK:
 		return
+
 	var holder = get_parent().get_node("TextureButton")
+
 	savedTexture = texture
-	savedQuantity =holder.quantity
+	savedQuantity = holder.quantity
 
 	if savedTexture != null:
-		file.store_line(savedTexture.get_path())
+		file.store_line(savedTexture.resource_path)
 	else:
 		file.store_line("")
 
@@ -37,9 +39,11 @@ func saveData():
 	print(savePath)
 
 
+
 func loadData():
 	var parentName = get_parent().get_name()
-	var savePath = ("user://Characters/"+ player.entity_name+ "/"+ parentName+ "_saved_texture_data.txt")
+
+	var savePath = "user://Characters/" + player.entity_name + "/" + grid_container.name + "/" + parentName + "_saved_texture_data.txt"
 
 	var file = File.new()
 
@@ -53,7 +57,9 @@ func loadData():
 	var quantity_str = file.get_line()
 
 	file.close()
+
 	var holder = get_parent().get_node("TextureButton")
+
 	if path == "":
 		texture = null
 		holder.quantity = 0

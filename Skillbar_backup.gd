@@ -4,22 +4,20 @@ onready var player = $"../.."
 onready var character_ui =  $"../Menu/CharacterBar"
 onready var animationcalls = $"../../AnimationCalls"
 onready var anim_calls = $"../../AnimationCalls"
-onready var grid:GridContainer =  $GridContainer
-onready var grid2:GridContainer = $GridContainer2 
+onready var grid =  $GridContainer
+onready var grid2 = $GridContainer2 
 onready var expand_button = $ExpandCollapse
 onready var inventory_grid: GridContainer = $"../Inventory/ScrollContainer/GridContainer"
 onready var inventory = $"../Inventory"
-onready var stats:Node = $"../../Stats"
+onready var stats = $"../../Stats"
 onready var tween: Tween = $Tween
-onready var tween2:Tween = $Tween2
-
+onready var tween2 = $Tween2
 var skill_bar_input:String = ""
 var active_cooldowns = {}
 var edit = false
 var capture_slot = null
 var expand_state = 0
 var mouse_repeat_counter={}
-
 var no_press_tween_skills=["combo attack","parry","guard"]
 var hold_skills={
 	"parry":true,
@@ -27,54 +25,30 @@ var hold_skills={
 	"combo attack":true,
 	"obliteration charge":true,
 }
-var combo_queue:int= 0
-const COMBO_QUEUE_MAX :int= 2
-var combo_atk_mode_hold:bool = false #false = click to attack, true = hold to attack like taking down a tree in minecraft
-var continue_combo_atk:bool = true#this sets combo attack to true and the animation continenues till this is false, set it false in animaiton cals, saves time in Animation creation
+
+var last_skill_input_time := 0
+var skill_input_lock_ms := 120
+
 
 const CONFIG_FILE_PATH = "user://skillbar_keybinds.cfg"
 const ACTION_PREFIX = "skill_slot_"
 const ACTION_PREFIX2="mouse_slot_"
 
 
-
-
-func _ready():
+func _ready()->void:
 	loadCooldowns()
 	loadKeybinds()
 	connectButtons()
-	resetSkillRuntime()
 
-
-
-func resetSkillRuntime():#initialization to prevent bugs where multiple inputs are possible at the start of the game 
-	active_cooldowns.clear()
-	continue_combo_atk = true
-	input_lock = false
-	input_lock_time = 0.0
-	player.current_skill = ""
-	for k in player.anim_locks.keys():
-		player.anim_locks[k] = false
-
-func consumeCombo():#called by the node AnimationCalls in animation call tracks for combo attack animations, enables queuing multiple base attacks 
-	if combo_queue > 0:
-		continue_combo_atk = true
-		combo_queue -= 1
-		
-
-
-var input_lock_time := 0.0
-var input_lock := false
-func _physics_process(delta):
+	
+func _physics_process(delta)->void:
 	updateCooldowns(delta)
-	input_lock_time -= delta
-	if input_lock_time <= 0:
-		input_lock = false
 	if player.cursor_visible == false:
 		matchInputSlot()
 		holdInputs()
 
-
+var combo_atk_mode_hold:bool = false
+var continue_combo_atk:bool = true 
 """
 AnimationCalls.combo_atk()->void stops the combo attack animation by setting continue_combo_atk to false.
 While it is true, the combo attack animation continues playing. combo_atk splits the animation into multiple
@@ -133,110 +107,46 @@ func holdInputs()->void:
 
 			chargeSkill(still_held,skill)
 
+func chargeSkill(still_held,skill):
+	if still_held:
+		if skill == "obliteration charge":
+			player.current_skill = "obliteration"
+
+			if Engine.get_physics_frames() % 40 == 0:
+				var energy_cost = Skills.getEnergyCost("obliteration charge")
+				var max_health = stats.max_health 
+
+				if player.stats.energy >= energy_cost:
+					player.stats.energy -= energy_cost
+					stats.charged_attack_stacks["obliteration"]["stacks"] += 1
+				elif player.stats.health > max_health * 0.5:
+					player.stats.health -= energy_cost
+					stats.charged_attack_stacks["obliteration"]["stacks"] += 2
+				else:
+					player.stats.health -= energy_cost * 2
+					stats.charged_attack_stacks["obliteration"]["stacks"] += 5
+
+				character_ui.updateBars()
+
+	if !still_held:
+		if skill == "obliteration charge":
+			player.anim_locks["obliteration charge"] = false
+			player.anim_locks["obliteration"] = true
+			player.current_skill = "obliteration"
+
+			var texture = Skills.skills["obliteration charge"]
+			var path = texture.resource_path
+			var cooldown = Skills.getCooldown(path)
+			cooldown /= max(0.01, player.stats.derived_stats["cooldown_reduction"])
+
+			active_cooldowns[path] = cooldown
+			Skills.applyCooldownEffects("obliteration charge", active_cooldowns)
 
 
-var obl_color:=Color(1,1,1,1)
-var obl_slots=[]
-var obl_active:=false
-
-var obl_current_color:=Color(1,1,1,1)
-var obl_target_color:=Color(1,1,1,1)
-var obl_skill_slots:=[]
-var obl_is_active:=false
-
-
-var chargeSkillColors={}
-
-func updateChargeSkillColor(skill_name,max_stacks,color_points):
-	if !Skills.skills.has(skill_name):return
-
-	if !chargeSkillColors.has(skill_name):
-		chargeSkillColors[skill_name]={
-			"color":Color.white,
-			"slots":[]
-		}
-
-	var data=chargeSkillColors[skill_name]
-
-	if data.slots.empty():
-		for container in [grid,grid2]:
-			for holder in container.get_children():
-				var slot=holder.get_node("Slot")
-				if slot.texture==Skills.skills[skill_name]:
-					data.slots.append(slot)
-
-	var stacks=float(stats.charged_attack_stacks[skill_name]["stacks"])
-	var percent=clamp(stacks/max_stacks,0.0,1.0)
-
-	var point_count=color_points.size()-1
-	var segment=percent*point_count
-	var segment_index=int(floor(segment))
-	var segment_alpha=segment-segment_index
-
-	if segment_index>=point_count:
-		segment_index=point_count-1
-		segment_alpha=1.0
-
-	var start_color=color_points[segment_index]
-	var end_color=color_points[segment_index+1]
-
-	data.color=start_color.linear_interpolate(end_color,segment_alpha)
-
-	for slot in data.slots:
-		if is_instance_valid(slot):
-			slot.modulate=data.color
-
-func chargeSkill(still_held_state,skill_name):
-	if skill_name!="obliteration charge":return
-
-	var skill_resource_path=Skills.skills[skill_name].resource_path
-	if active_cooldowns.has(skill_resource_path):return
-
-	updateChargeSkillColor("obliteration",100.0,[Color.white,Color(0,0.6,1),Color(0.6,0,0.8),Color(1,0,0)])
-
-	if !still_held_state:
-		if chargeSkillColors.has("obliteration"):
-			chargeSkillColors["obliteration"].color=Color.white
-
-			for slot in chargeSkillColors["obliteration"].slots:
-				if is_instance_valid(slot):
-					slot.modulate=Color.white
-
-		player.anim_locks["obliteration charge"]=false
-		player.anim_locks["obliteration"]=true
-		player.current_skill="obliteration"
-
-		var cooldown_value=Skills.getCooldown(skill_resource_path)
-		cooldown_value/=max(0.01,player.stats.derived_stats["cooldown_reduction"])
-		active_cooldowns[skill_resource_path]=cooldown_value
-		Skills.applyCooldownEffects(skill_name,active_cooldowns)
-		return
-
-	player.current_skill="obliteration"
-
-	if Engine.get_physics_frames()%40==0:
-		var energy_cost_value=Skills.getEnergyCost(skill_name)
-		var max_health_value=stats.max_health
-
-		if player.stats.energy>=energy_cost_value:
-			player.stats.energy-=energy_cost_value
-			stats.charged_attack_stacks["obliteration"]["stacks"]+=1
-		elif player.stats.health>max_health_value*0.5:
-			player.stats.health-=energy_cost_value
-			stats.charged_attack_stacks["obliteration"]["stacks"]+=2
-		else:
-			player.stats.health-=energy_cost_value*2
-			stats.charged_attack_stacks["obliteration"]["stacks"]+=5
-
-		character_ui.updateBars()
-		
-var skill_data = {
-	"combo attack": {"path":"", "energy_cost":0, "slot":null}
-}
+var skill_state = {}
 
 func getSkillData(slot):
-	if slot == null or slot.texture == null:
-		return null
+	if slot == null or slot.texture == null: return null
 
 	var path = slot.texture.resource_path
 	var skill_name = ""
@@ -246,8 +156,7 @@ func getSkillData(slot):
 			skill_name = s
 			break
 
-	if skill_name == "":
-		return null
+	if skill_name == "": return null
 
 	return {
 		"skill_name": skill_name,
@@ -256,100 +165,108 @@ func getSkillData(slot):
 		"slot": slot
 	}
 
-func skills(slot)->void:
-	if input_lock: return
-	var data=getSkillData(slot)
-	if data==null: return
+func skills(slot) -> void:
+	var data = getSkillData(slot)
+	if data == null: return
 
-	var skill_name=data.skill_name
-	var path=data.path
-	var energy_cost=data.energy_cost
+	var skill_name = data.skill_name
+	var path = data.path
+	var energy_cost = data.energy_cost
 
-	var is_hold=hold_skills.has(skill_name)
-	var is_combo=skill_name=="combo attack"
-	var is_exempt=is_combo or skill_name=="guard" or skill_name=="parry"
+	var is_unlocked_no_limit = false
+	if slot != null and slot.texture != null:
+		for s in hold_skills:
+			if Skills.skills.has(s) and Skills.skills[s] == slot.texture:
+				is_unlocked_no_limit = true
+				break
 
-	player.is_in_combat=true
-	player.combat_timer=10
+	player.is_in_combat = true
+	player.combat_timer = 10
 
-	if player.anim_locks.get("stunned",false) or player.anim_locks.get("staggered",false):
+	if player.anim_locks.get("stunned", false) or player.anim_locks.get("staggered", false):
 		return
 
-	var is_skill:=false
+	var is_skill = false
 	for s in Skills.skills:
-		if Skills.skills[s]==slot.texture:
-			is_skill=true
+		if Skills.skills[s] == slot.texture:
+			is_skill = true
 			break
 
-	useItemFromKeyboard(is_skill,slot,path)
+	useItemFromKeyboard(is_skill, slot, path)
 
-	if !is_hold and !is_exempt and active_cooldowns.has(path):
+	if active_cooldowns.has(path):
 		return
 
-	var texture=Skills.skills[skill_name]
+	var texture = Skills.skills[skill_name]
 
-	var unlocked:=false
-	var stack=[$"../SkillTreeRoot"]
+	var unlocked = false
+	var stack = [$"../SkillTreeRoot"]
 
-	while stack.size()>0:
-		var node=stack.pop_back()
+	while stack.size() > 0:
+		var node = stack.pop_back()
+
 		for child in node.get_children():
 			stack.append(child)
-			if !(child is TextureButton): continue
-			if !child.has_node("Slot"): continue
-			var has_skill_level:=false
+
+			if !(child is TextureButton):
+				continue
+			if !child.has_node("Slot"):
+				continue
+
+			var has_skill_level = false
 			for prop in child.get_property_list():
-				if prop.name=="skill_level":
-					has_skill_level=true
+				if prop.name == "skill_level":
+					has_skill_level = true
 					break
-			if !has_skill_level: continue
 
-			var slot_node=child.get_node("Slot")
-			if slot_node.texture==texture and child.skill_level>0:
-				unlocked=true
+			if !has_skill_level:
+				continue
+
+			var slot_node = child.get_node("Slot")
+
+			if slot_node.texture == texture and child.skill_level > 0:
+				unlocked = true
 				break
-		if unlocked: break
 
-	if !unlocked: return
+		if unlocked:
+			break
 
-	if !is_hold:
-		if player.anim_locks.get(skill_name,false): return
+	if !unlocked:
+		return
 
-	if not skill_name in Skills.chargeable_skills and energy_cost>0:
-		if player.stats.energy<energy_cost: return
+	if (!hold_skills.has(skill_name) and player.anim_locks.get(skill_name, false)) or active_cooldowns.has(path):
+		return
 
-	if is_combo:
-		if combo_atk_mode_hold: continue_combo_atk=true
-		else: continue_combo_atk=true
+	if !(skill_name in Skills.chargeable_skills) and energy_cost > 0 and player.stats.energy < energy_cost:
+		return
 
-	delayedSkill(skill_name,path,energy_cost,slot)
-	
-	
-var skill_delay_busy:=false
-func delayedSkill(skill_name,path,energy_cost,slot):
-	if player.current_skill!="" and player.current_skill!="none":
-		var l:=false
-		for k in player.anim_locks:
-			if player.anim_locks[k]:l=true;break
-		if l:yield(get_tree().create_timer(0.15),"timeout")
-	applySkill(skill_name,path,energy_cost,slot)
-	
-	
-func applySkill(skill_name,path,energy_cost,slot):
-	if active_cooldowns.has(path) and skill_name!="combo attack":return
+	if skill_name == "combo attack":
+		if combo_atk_mode_hold == false:
+			continue_combo_atk = true
 
-	if skill_name!="combo attack":
-		player.unlockAnim()
-		anim_calls.unlockAnim()
+	applySkill(skill_name, path, energy_cost, slot)
 
-	player.flip_blend_timer=0.0
-	player.dodge_cleanup_timer=0.0
-	player.dodge_cleanup_reset=false
-	player.anim_locks[skill_name]=true
-	player.current_skill=skill_name
-	player.combat_timer=10
-	applyCooldownAndCost(skill_name,path,energy_cost)
-	tweenSkillIcons(skill_name,slot)
+func applySkill(skill_name, path, energy_cost, slot):
+	var now = OS.get_ticks_msec()
+
+	if !skill_state.has(skill_name):
+		skill_state[skill_name] = {}
+
+	skill_state[skill_name].start_time = now
+	skill_state[skill_name].anim_lock = true
+
+	player.unlockAnim()
+	anim_calls.unlockAnim()
+	player.flip_blend_timer = 0.0
+	player.dodge_cleanup_timer = 0.0
+	player.dodge_cleanup_reset = false
+	player.anim_locks[skill_name] = true
+	player.current_skill = skill_name
+	player.combat_timer = 10
+
+	applyCooldownAndCost(skill_name, path, energy_cost)
+	tweenSkillIcons(skill_name, slot)
+
 
 
 
@@ -500,26 +417,36 @@ func updateCooldowns(delta):# I suspect this funciton is called twice somewhere 
 			active_cooldowns.erase(key)
 			
 
+			
+			
 func matchInputSlot()->void:
 	for i in range(grid.get_child_count()):
-		var a=ACTION_PREFIX+str(i)
-		if Input.is_action_just_pressed(a):
-			var slot=grid.get_child(i).get_node("Slot")
-			if slot.texture == Skills.skills["combo attack"] and !combo_atk_mode_hold:
-				if continue_combo_atk == true:
-					combo_queue = min(combo_queue + 1, COMBO_QUEUE_MAX)
+		var holder = grid.get_child(i)
+		var slot = holder.get_node("Slot")
+
+		if Input.is_action_pressed(ACTION_PREFIX + str(i)):
+
+			# ---------------- COMBO RULE ----------------
+			if slot.texture == Skills.skills["combo attack"]:
+				if combo_atk_mode_hold == false:
+					continue_combo_atk = true
+			# --------------------------------------------
+
 			skills(slot)
-			return
 
 	for i in range(grid2.get_child_count()):
-		var a=ACTION_PREFIX2+str(i)
-		if Input.is_action_just_pressed(a):
-			var slot=grid2.get_child(i).get_node("Slot")
-			if slot.texture == Skills.skills["combo attack"] and !combo_atk_mode_hold:
-				if continue_combo_atk == true:
-					combo_queue = min(combo_queue + 1, COMBO_QUEUE_MAX)
+		var holder = grid2.get_child(i)
+		var slot = holder.get_node("Slot")
+
+		if Input.is_action_pressed(ACTION_PREFIX2 + str(i)):
+
+			# ---------------- COMBO RULE ----------------
+			if slot.texture == Skills.skills["combo attack"]:
+				if combo_atk_mode_hold == false:
+					continue_combo_atk = true
+			# --------------------------------------------
 			skills(slot)
-			return
+
 
 
 func slotPressed(holder)->void:

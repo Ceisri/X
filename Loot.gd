@@ -20,7 +20,6 @@ func _ready():
 var grabbed_corpse = null
 var grabbed_collision_shapes = []
 func _physics_process(delta):
-
 	if Input.is_action_just_pressed("loot"):
 		var corpse = getDeadBodyInArea()
 		updateSlots()
@@ -94,6 +93,7 @@ func dropCorpse():
 	
 	
 func getDeadBodyInArea():
+	checkForRevives()
 	for body in area.get_overlapping_bodies():
 		if body == player:
 			continue
@@ -102,6 +102,52 @@ func getDeadBodyInArea():
 				return body
 	return null
 
+var last_health = {} # corpseKey -> previous health
+func resetCorpseLoot(corpse):
+	if corpse == null:
+		return
+	var corpseKey = getCorpseKey(corpse)
+	if corpse_loot_data.has(corpseKey):
+		corpse_loot_data.erase(corpseKey)
+
+func checkForRevives():
+	for body in get_tree().get_nodes_in_group("entity"):
+		if !"stats" in body:
+			continue
+
+		var corpseKey = getCorpseKey(body)
+		var currentHealth = body.stats.health
+
+		if !last_health.has(corpseKey):
+			last_health[corpseKey] = currentHealth
+			continue
+
+		var previousHealth = last_health[corpseKey]
+
+		# dead -> alive transition
+		if previousHealth <= 0 and currentHealth > 0:
+			resetCorpseLoot(body)
+
+		last_health[corpseKey] = currentHealth
+
+	# repeat for "Entity" group if you use both
+	for body in get_tree().get_nodes_in_group("Entity"):
+		if !"stats" in body:
+			continue
+
+		var corpseKey = getCorpseKey(body)
+		var currentHealth = body.stats.health
+
+		if !last_health.has(corpseKey):
+			last_health[corpseKey] = currentHealth
+			continue
+
+		var previousHealth = last_health[corpseKey]
+
+		if previousHealth <= 0 and currentHealth > 0:
+			resetCorpseLoot(body)
+
+		last_health[corpseKey] = currentHealth
 
 func getCorpseKey(body):
 	return body.stats.species + "_" + body.stats.Name + "_" + body.name

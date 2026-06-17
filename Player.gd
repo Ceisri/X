@@ -25,7 +25,7 @@ var aim_turn = float()
 var movement = Vector3()
 var vertical_velocity = Vector3()
 var movement_speed = int()
-var angular_acceleration:int = 5
+var angular_acceleration:int = 7.5
 var acceleration = int()
 var can_move= true
 var is_carrying = false
@@ -52,64 +52,30 @@ enum WeaponMode {
 	TWO_HANDED
 }
 var weapons:int = WeaponMode.NONE
+var skill_start_time:int = 0
+var current_skill:String = "none"
+var anim_locks = { 
+	"combo attack":false,
+	
+#BERSERK SKILLS
+	"raze":false,
+	"reckless vengeance":false,
+	"shoulder bash":false,
+	"stone splitter":false,
+	"brutal chop":false,
+	"fury strike":false,
+	"sadistic blow":false,
+	"sunder" :false,
+	"compas slash":false,
+	"sweeping slash":false,
+	"heart thrust":false,
+	"obliteration":false,
+	"obliteration charge":false,
+	"obliteration start":false,
+	"execution":false,
+	
 
-
-
-
-func _ready():
-	for child in $UI/Skillbar/GridContainer.get_children():
-		child.get_node("Slot").player=self
-		child.get_node("TextureButton").parent=self
-		child.get_node("Slot").loadData()
-
-	direction=Vector3.BACK.rotated(Vector3.UP,$Camroot/h.global_transform.basis.get_euler().y)
-
-
-var interrupt_groups = {
-	"hard_interrupt":["dodge","block","parry"],
-	"skills":["section","perforation trifecta","cleave","battlecry","scream","overhead strike"],
-	"base_attack":["base attack"]
-}
-func activateAnimLock(lock_name:String)->void:
-	if !anim_locks.has(lock_name):
-		return
-
-	# Nothing can happen while dodge is active
-	if anim_locks["dodge"] and lock_name != "dodge":
-		return
-
-	if lock_name == "dodge":
-		unlockAnim()
-		anim_locks["dodge"] = true
-		current_skill = "dodge"
-		return
-
-	if lock_name == "parry":
-		unlockAnim()
-		anim_locks["parry"] = true
-		current_skill = "parry"
-		return
-
-	if lock_name == "base attack":
-		for key in anim_locks:
-			if anim_locks[key]:
-				return
-
-		anim_locks["base attack"] = true
-		current_skill = lock_name
-		return
-
-	if lock_name in interrupt_groups["skills"]:
-		anim_locks["base attack"] = false
-
-		for skill in interrupt_groups["skills"]:
-			anim_locks[skill] = false
-
-		anim_locks[lock_name] = true
-		current_skill = lock_name
-var anim_locks = { #This becomes faster and more modular and automatic if all anim locks match name with skills from Skills.gd
-	"base attack":false,
-	"overhead strike":false,
+	"backstep":false,
 	"death from above":false,
 	"flury of blows":false,
 	"section":false,
@@ -118,7 +84,6 @@ var anim_locks = { #This becomes faster and more modular and automatic if all an
 	"block_react":false,
 	"dodge":false,
 	"cleave":false,
-	"cleave_con":false,
 	"battlecry":false,
 	"dash":false,
 	"stop_run":false,
@@ -131,26 +96,175 @@ var anim_locks = { #This becomes faster and more modular and automatic if all an
 	"stunned":false,
 	"staggered":false}
 
-var current_skill:String = "none"
+
+func _ready():
+	for child in $UI/Skillbar/GridContainer.get_children():
+		child.get_node("Slot").player=self
+		child.get_node("TextureButton").parent=self
+		child.get_node("Slot").loadData()
+	direction=Vector3.BACK.rotated(Vector3.UP,$Camroot/h.global_transform.basis.get_euler().y)
+	initializeAnimationBlends()
+
+var interrupt_groups = {
+	"hard_interrupt":["dodge","block","parry"],
+	"skills":["section","perforation trifecta","cleave","battlecry","scream","stone splitter"],
+	"base_attack":["combo attack"]
+}
+func activateAnimLock(lock_name:String)->void:#Anim cancels here 
+	if !anim_locks.has(lock_name):
+		return
+	# Nothing can happen while dodge is active
+	if anim_locks["dodge"] and lock_name != "dodge":
+		return
+	if lock_name == "dodge":
+		unlockAnim()
+		anim_locks["dodge"] = true
+		current_skill = "dodge"
+		return
+	if lock_name == "parry":
+		unlockAnim()
+		anim_locks["parry"] = true
+		current_skill = "parry"
+		return
+
+	if lock_name == "combo attack":
+		for key in anim_locks:
+			if anim_locks[key]:
+				return
+
+		anim_locks["combo attack"] = true
+		current_skill = lock_name
+		return
+
+	if lock_name in interrupt_groups["skills"]:
+		anim_locks["combo attack"] = false
+
+		for skill in interrupt_groups["skills"]:
+			anim_locks[skill] = false
+
+		anim_locks[lock_name] = true
+		current_skill = lock_name
+func getActiveAnimLock()->String:
+	for lock_name in anim_locks:
+		if anim_locks[lock_name]:
+			return lock_name
+	return ""
 
 
 
-
+var combat_idle_animations = {
+	WeaponMode.NONE:"0_Idle_cycle",
+	WeaponMode.SWORD:"2h_Idle_cycle",
+	WeaponMode.DUAL:"2h_Idle_cycle",
+	WeaponMode.SHIELD:"2h_Idle_cycle",
+	WeaponMode.TWO_HANDED:"IdleTwoHanded_cycle",
+}
+onready var combat_idle = animation_tree.tree_root.get_node("CombatIdle")
+onready var combat_idle_skill_smooth = animation_tree.tree_root.get_node("IdleForSkill")
 var skill_animations = {
-	"base attack":{
-		WeaponMode.NONE:"1h_BaseATK_cycle",
-		WeaponMode.SWORD:"1h_BaseATK_cycle",
-		WeaponMode.DUAL:"1h_BaseATK_cycle",
-		WeaponMode.SHIELD:"1h_BaseATK_cycle",
-		WeaponMode.TWO_HANDED:"1h_BaseATK_cycle",
+	"combo attack":{
+		WeaponMode.NONE:"ComboATK_TwoHanded_cycle",
+		WeaponMode.SWORD:"ComboATK_TwoHanded_cycle",
+		WeaponMode.DUAL:"ComboATK_TwoHanded_cycle",
+		WeaponMode.SHIELD:"ComboATK_TwoHanded_cycle",
+		WeaponMode.TWO_HANDED:"ComboATK_TwoHanded_cycle",
 	},
-	"overhead strike":{
-		WeaponMode.NONE:"1h_OverheadStrike",
-		WeaponMode.SWORD:"1h_OverheadStrike",
-		WeaponMode.DUAL:"1h_OverheadStrike",
-		WeaponMode.SHIELD:"1h_OverheadStrike",
-		WeaponMode.TWO_HANDED:"1h_OverheadStrike",
+	
+#BERSERK SKILLS
+	"raze":{
+		WeaponMode.SWORD:"Berserk_Raze_OneHanded",
+		WeaponMode.DUAL:"Berserk_Raze_OneHanded",
+		WeaponMode.SHIELD:"Berserk_Raze_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_Raze_TwoHanded",
 	},
+	"reckless vengeance":{
+		WeaponMode.SWORD:"Berserk_DeadlyGamble_ALL",
+		WeaponMode.DUAL:"Berserk_DeadlyGamble_ALL",
+		WeaponMode.SHIELD:"Berserk_DeadlyGamble_ALL",
+		WeaponMode.TWO_HANDED:"Berserk_DeadlyGamble_TwoHanded",
+	},
+	"stone splitter":{
+		WeaponMode.SWORD:"Berserk_StoneSplitter_OneHanded",
+		WeaponMode.DUAL:"Berserk_StoneSplitter_OneHanded",
+		WeaponMode.SHIELD:"Berserk_StoneSplitter_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_StoneSplitter_TwoHanded",
+	},
+	"brutal chop":{
+		WeaponMode.SWORD:"Berserk_BrutalChop_OneHanded",
+		WeaponMode.DUAL:"Berserk_BrutalChop_OneHanded",
+		WeaponMode.SHIELD:"Berserk_BrutalChop_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_BrutalChop_TwoHanded",
+	},
+	"shoulder bash":{
+		WeaponMode.NONE:"Berserk_OneHanded",
+		WeaponMode.SWORD:"Berserk_OneHanded",
+		WeaponMode.DUAL:"Berserk_OneHanded",
+		WeaponMode.SHIELD:"Berserk_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_ShoulderBash",
+	},
+	
+	"fury strike":{
+		WeaponMode.SWORD:"Berserk_FuryStrike_OneHanded",
+		WeaponMode.DUAL:"Berserk_FuryStrike_OneHanded",
+		WeaponMode.SHIELD:"Berserk_FuryStrike_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_FuryStrike_TwoHanded",
+	},
+	"sadistic blow":{
+		WeaponMode.SWORD:"Berserk_SadisticBlow_OneHanded",
+		WeaponMode.DUAL:"Berserk_SadisticBlow_OneHanded",
+		WeaponMode.SHIELD:"Berserk_SadisticBlow_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_SadisticBlow_TwoHanded",
+	},
+
+	"sunder" :{
+		WeaponMode.SWORD:"Berserk_Sunder_OneHanded",
+		WeaponMode.DUAL:"Berserk_Sunder_OneHanded",
+		WeaponMode.SHIELD:"Berserk_Sunder_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_Sunder_TwoHanded",
+	},
+	"sweeping slash":{
+		WeaponMode.SWORD:"1h_OverheadStrikeContinue",
+		WeaponMode.DUAL:"1h_OverheadStrikeContinue",
+		WeaponMode.SHIELD:"1h_OverheadStrikeContinue",
+		WeaponMode.TWO_HANDED:"1h_OverheadStrikeContinue",
+	},
+	"heart thrust":{
+		WeaponMode.SWORD:"Berserk_HeartThrust_OneHanded",
+		WeaponMode.DUAL:"Berserk_HeartThrust_OneHanded",
+		WeaponMode.SHIELD:"Berserk_HeartThrust_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_HeartThrust_TwoHanded",
+	},
+	"obliteration start":{
+		WeaponMode.SWORD:"Berserk_ObliterationCharge_Start",
+		WeaponMode.DUAL:"Berserk_ObliterationCharge_Start",
+		WeaponMode.SHIELD:"Berserk_ObliterationCharge_Start",
+		WeaponMode.TWO_HANDED:"Berserk_ObliterationCharge_Start",
+	},
+	"obliteration charge":{
+		WeaponMode.SWORD:"Berserk_ObliterationCharge_cycle",
+		WeaponMode.DUAL:"Berserk_ObliterationCharge_cycle",
+		WeaponMode.SHIELD:"Berserk_ObliterationCharge_cycle",
+		WeaponMode.TWO_HANDED:"Berserk_ObliterationCharge_cycle",
+	},
+	"obliteration":{
+		WeaponMode.SWORD:"Berserk_SadisticBlow_TwoHanded",
+		WeaponMode.DUAL:"Berserk_SadisticBlow_TwoHanded",
+		WeaponMode.SHIELD:"Berserk_SadisticBlow_TwoHanded",
+		WeaponMode.TWO_HANDED:"Berserk_SadisticBlow_TwoHanded",
+	},
+
+
+
+	"execution":{
+		WeaponMode.NONE:"Berserk_FuryStrike",
+		WeaponMode.SWORD:"Berserk_FuryStrike",
+		WeaponMode.DUAL:"Berserk_FuryStrike",
+		WeaponMode.SHIELD:"Berserk_FuryStrike",
+		WeaponMode.TWO_HANDED:"Berserk_FuryStrike",
+	},
+	
+	
+	
 	"death from above":{
 		WeaponMode.NONE:"ALL_DeathFromAbove",
 		WeaponMode.SWORD:"ALL_DeathFromAbove",
@@ -193,6 +307,14 @@ var skill_animations = {
 		WeaponMode.SHIELD:"ALL_SwordGuard_cycle",
 		WeaponMode.TWO_HANDED:"ALL_SwordGuard_cycle",
 	},
+	"guard":{
+		WeaponMode.NONE:"ALL_SwordGuard_cycle",
+		WeaponMode.SWORD:"ALL_SwordGuard_cycle",
+		WeaponMode.DUAL:"ALL_SwordGuard_cycle",
+		WeaponMode.SHIELD:"ALL_SwordGuard_cycle",
+		WeaponMode.TWO_HANDED:"ALL_SwordGuard_cycle",
+	},
+
 	"dodge":{
 		WeaponMode.NONE:"ALL_EvasiveFlip",
 		WeaponMode.SWORD:"ALL_EvasiveFlip",
@@ -201,9 +323,17 @@ var skill_animations = {
 		WeaponMode.TWO_HANDED:"ALL_EvasiveFlip",
 	},
 }
-
-var last_skill_animation=""
+var last_skill_animation:String =""
 onready var skill_anim = animation_tree.tree_root.get_node("Skill")
+
+func setCombatIdleAnimation()->void:
+	if !combat_idle_animations.has(weapons):
+		return
+	var anim = combat_idle_animations[weapons]
+
+	combat_idle.animation = anim
+	combat_idle_skill_smooth.animation = anim
+
 
 """
 Assigns the correct animation for a skill based on the player's current
@@ -216,16 +346,13 @@ Returns:
 	void
 """
 
-var last_active_skill := ""
+var last_active_skill:String = ""
 
 func setSkillAnimation(skill_name:String)->void:
 	if !skill_animations.has(skill_name):
 		return
-
 	var skill_data = skill_animations[skill_name]
-	var new_anim = ""
-
-
+	var new_anim:String = ""
 	if skill_data.has(weapons):
 		new_anim=skill_data[weapons]
 	else:
@@ -252,23 +379,18 @@ func setSkillAnimation(skill_name:String)->void:
 	animation_tree.active = true
 
 
-func get_active_anim_lock()->String:
-	for lock_name in anim_locks:
-		if anim_locks[lock_name]:
-			return lock_name
-	return ""
-	
 
-var movement_blend := -1.0
-var combat_blend := -1.0
-var attack_defend_switch := 0.0
 
-var movement_type_blend := 0.0
-var vertical_blend := 0.0
-var crouch_blend := 1.0
-var crouch_mode_blend := 0.0
-var climb_blend := 0.0
-var water_blend := 0.0
+var movement_blend:float= -1.0
+var combat_blend:float= -1.0
+var attack_defend_switch:float= 0.0
+
+var movement_type_blend:float= 0.0
+var vertical_blend:float= 0.0
+var crouch_blend:float= 1.0
+var crouch_mode_blend:float= 0.0
+var climb_blend:float= 0.0
+var water_blend:float = 0.0
 
 var anim_blend_cache := {}
 
@@ -284,63 +406,81 @@ var anim_blend_cache := {}
 # - speed: interpolation strength (higher = snappier, lower = smoother)
 # - delta: frame delta time
 # ------------------------------------------------------------
-func setAnimBlend(path:String, target:float, speed:float, delta:float)->void:
-	var current := 0.0
+var flip_blend_timer:float= 0.0
+var dodge_cleanup_timer:float= 0.0
+var dodge_cleanup_reset:bool= false
+var dodge_cleanup_blend_speed:float = 0.4
+var blend:float = 0.8
+func setAnimBlend(path:String, target:float, speed:float, delta:float) -> void:
+	var current:float = 0.0
 
 	if anim_blend_cache.has(path):
-		current = anim_blend_cache[path]
+		var cached_value = anim_blend_cache[path]
+		if cached_value != null:
+			current = float(cached_value)
+		else:
+			print("Player.gd setAnimBlend(): AnimBlend warning: null cache value for path: ", path)
+			current = 0.0
+	else:
+		var tree_value = animation_tree.get(path)
+		if tree_value == null:
+			print("Player.gd setAnimBlend(): AnimBlend warning: missing AnimationTree path: ", path)
+			current = 0.0
+		else:
+			current = float(tree_value)
 
 	current = move_toward(current, target, delta * speed)
+
 	anim_blend_cache[path] = current
-
 	animation_tree.set(path, current)
+func initializeAnimationBlends() -> void:
+	var blendPaths:Array = [
+		"parameters/CombatSwitch/blend_amount",
+		"parameters/MeleeSkillSwitch/blend_amount",
+		"parameters/Movement/blend_amount",
+		"parameters/MovementType/blend_amount",
+		"parameters/Vertical/blend_amount",
+		"parameters/CrouchOrNot/blend_amount",
+		"parameters/CrouchMode/blend_amount",
+		"parameters/climbPoint/blend_amount",
+		"parameters/Water/blend_amount",
+		"parameters/IsInCombat/blend_amount",
+		"parameters/SkillBlend/blend_amount"
+	]
 
+	anim_blend_cache.clear()
 
-# ------------------------------------------------------------
-# animationOrder
-# Central animation state resolver.
-# Handles:
-# - Combat vs movement blending
-# - Skill activation blending
-# - Base attack combo sequencing
-# - Movement state transition
-# Base attack behavior:
-# - Treated as a 3-step combo sequence
-# - combo_sequence (1 → 2 → 3) selects which animation slot
-#   inside the Base Attack skill animation list is played
-# - All transitions between combo steps are driven by
-#   AnimationTree blend parameter "BaseATKSwitch"
-# - Attack speed scales playback via SkillTimeScale
-# Smoothing control:
-# - Combat and movement use separate interpolation speeds
-# - Increasing speed = more responsive but sharper transitions
-# - Lower speed = smoother but more delayed transitions
-# ------------------------------------------------------------
-var flip_blend_timer := 0.0
-var dodge_cleanup_timer := 0.0
-var dodge_cleanup_reset := false
-var dodge_cleanup_blend_speed:float = 0.4
+	for path in blendPaths:
+		var value = animation_tree.get(path)
+
+		if value == null:
+			print("Player.gd initializeAnimationBlends(): AnimBlend init warning: missing AnimationTree path: ", path)
+			value = 0.0
+
+		anim_blend_cache[path] = float(value)
+
+func safeGetBlend(path:String) -> float:
+	var value = animation_tree.get(path)
+	if value == null:
+		return 0.0
+	return float(value)
+	
+	
+var skillExitBlendSpeed:float = 2.0
 func animationOrder()->void:
-	# ============================================================
-	# ANIMATION TREE MUST ALWAYS REMAIN ACTIVE
-	# ============================================================
-	# This function is the central animation resolver.
-	# It decides whether the character is currently:
-	# - Performing a skill
-	# - In combat
-	# - Moving
-	# - Swimming
-	# - Climbing
-	# - Crouching
-	# - Airborne
-	#
-	# All AnimationTree parameters are driven from here.
-	# ============================================================
 	animation_tree.active=true
 
 	var delta:float =get_process_delta_time()
-	var active_lock:=get_active_anim_lock()
+	var active_lock:=getActiveAnimLock()
+	var now = OS.get_ticks_msec() / 1000.0
+	var skill_scale:float =  stats.derived_stats["attack_speed"]
+	if anim_calls.speed_up_combo_until.has(active_lock):
+		if now < anim_calls.speed_up_combo_until[active_lock]:
+			skill_scale = stats.derived_stats["attack_speed"] + 3
+		else:
+			anim_calls.speed_up_combo_until.erase(active_lock)
 
+	animation_tree.set("parameters/SkillTimeScale/scale", skill_scale)
 	# -----------------------------
 	# STAGGER / STUN OVERRIDE
 	# -----------------------------
@@ -350,6 +490,7 @@ func animationOrder()->void:
 		skill_anim.animation = "staggered"
 
 		animation_tree.set("parameters/CombatSwitch/blend_amount", 1.0)
+		animation_tree.set("parameters/MeleeSkillSwitch/blend_amount",1.0)
 		animation_tree.set("parameters/MeleeSkillSwitch/blend_amount", 1.0)
 		return
 
@@ -378,62 +519,25 @@ func animationOrder()->void:
 			return
 		else:
 			if dodge_cleanup_reset:
-				setAnimBlend(
-					"parameters/CombatSwitch/blend_amount",
-					0.0,
-					dodge_cleanup_blend_speed,
-					delta
-				)
+				setAnimBlend("parameters/CombatSwitch/blend_amount",0.0,dodge_cleanup_blend_speed,delta)
 
-				setAnimBlend(
-					"parameters/MeleeSkillSwitch/blend_amount",
-					0.0,
-					dodge_cleanup_blend_speed,
-					delta
-				)
+				setAnimBlend("parameters/MeleeSkillSwitch/blend_amount",0.0,dodge_cleanup_blend_speed,delta)
 
 			dodge_cleanup_reset = false
 		# ============================================================
 		# SKILL / COMBAT STATE
 		# ============================================================
-		# Any active animation lock that exists in the skill table
-		# is considered a skill animation.
-		#
-		# Examples:
-		# - base attack
-		# - parry
-		# - cleave
-		# - section
-		# - battlecry
-		# ============================================================
-		
 		if active_lock!="" and skill_animations.has(active_lock):
-
-			# --------------------------------------------------------
-			# Select and apply the correct animation for the skill.
-			# The animation depends on currently equipped weapon type.
-			# --------------------------------------------------------
 			setSkillAnimation(active_lock)
+			setAnimBlend("parameters/SkillBlend/blend_amount",1.0,blend,delta)
+			setAnimBlend("parameters/CombatSwitch/blend_amount",1.0,blend,delta)
+			setAnimBlend("parameters/MeleeSkillSwitch/blend_amount",1.0,blend,delta)
 
-			# --------------------------------------------------------
-			# Smoothly enter combat mode.
-			# These switches drive the AnimationTree into the
-			# combat/skill branch.
-			# --------------------------------------------------------
-			setAnimBlend("parameters/CombatSwitch/blend_amount",1.0,10.0,delta)
-			setAnimBlend("parameters/MeleeSkillSwitch/blend_amount",1.0,10.0,delta)
+			if active_lock == "combo attack":
+				skill_scale = stats.derived_stats["attack_speed"]
 
-			# --------------------------------------------------------
-			# Base attack no longer uses combo stages.
-			# It is now a single looping/cycling animation.
-			#
-			# Attack speed still affects playback speed.
-			# --------------------------------------------------------
-			if active_lock=="base attack":
-				animation_tree.set(
-					"parameters/SkillTimeScale/scale",
-					stats.derived_stats["attack_speed"]
-				)
+			if anim_calls != null and anim_calls.speed_up_combos.has(active_lock):
+				animation_tree.set("parameters/SkillTimeScale/scale", skill_scale)
 
 			return
 
@@ -489,11 +593,13 @@ func animationOrder()->void:
 				# ----------------------------------------------------
 				"idle":
 					movement_target=-1.0
-
 					if is_in_combat:
-						setAnimBlend("parameters/IsInCombat/blend_amount",1.0,10.0,delta)
+						setAnimBlend("parameters/IsInCombat/blend_amount",1.0,blend,delta)
+						if combat_idle_animations.has(weapons):
+
+							combat_idle.animation = combat_idle_animations[weapons]
 					else:
-						setAnimBlend("parameters/IsInCombat/blend_amount",0.0,10.0,delta)
+						setAnimBlend("parameters/IsInCombat/blend_amount",0.0,blend,delta)
 
 				# ----------------------------------------------------
 				# WALK
@@ -507,10 +613,7 @@ func animationOrder()->void:
 				"run":
 					movement_target=1.0
 
-					animation_tree.set(
-						"parameters/RunSpeed/scale",
-						0.8+(0.0125*stats.derived_stats["run_speed"])
-					)
+					animation_tree.set("parameters/RunSpeed/scale",0.8+(0.0125*stats.derived_stats["run_speed"]))
 
 				# ----------------------------------------------------
 				# CROUCH IDLE
@@ -549,10 +652,7 @@ func animationOrder()->void:
 					movement_type_target=-1.0
 					water_target=1.0
 
-					animation_tree.set(
-						"parameters/SwimSpeed/scale",
-						0.97+(0.03*stats.derived_stats["swim_speed"])
-					)
+					animation_tree.set("parameters/SwimSpeed/scale",0.97+(0.03*stats.derived_stats["swim_speed"]))
 
 				# ----------------------------------------------------
 				# TREADING WATER
@@ -560,7 +660,6 @@ func animationOrder()->void:
 				"treading water":
 					movement_type_target=-1.0
 					water_target=0.0
-
 		# ============================================================
 		# FINAL BLENDING
 		# ============================================================
@@ -583,7 +682,7 @@ func animationOrder()->void:
 var combo_sequence:int = 1
 var combo_timer:float = 60.0
 func combatInputs()->void:
-	if anim_locks["base attack"] == false:
+	if anim_locks["combo attack"] == false:
 		combo_timer = max(combo_timer - 1.0, 0.0)
 	if anim_locks["parry"] == true:
 		guarding = true
@@ -635,11 +734,10 @@ func physics(delta):
 	move_and_slide(movement, Vector3.UP)
 
 
-func _process(delta):
-	animationOrder()
-	
+
 
 func _physics_process(delta):
+	animationOrder()
 	safetyStuff()
 	if Input.is_action_just_pressed("unstuck"):
 		translation.x = 0
@@ -648,6 +746,7 @@ func _physics_process(delta):
 		enableEntityCollisions()
 	if Input.is_action_just_pressed("0"):
 		$character/root/Skeleton/Mesh.visible = !$character/root/Skeleton/Mesh.visible
+
 	$Label.text = """
 active_lock=%s
 current_skill=%s
@@ -665,13 +764,15 @@ CombatSwitch=%s
 MeleeSkillSwitch=%s
 BaseATKSwitch=%s
 
+SkillTimeScale=%s
+
 movement_mode=%s
 current_anim=%s
 """ % [
-	get_active_anim_lock(),
+	getActiveAnimLock(),
 	current_skill,
 
-	anim_locks["base attack"],
+	anim_locks["combo attack"],
 	anim_locks["cleave"],
 	anim_locks["section"],
 	anim_locks["perforation trifecta"],
@@ -683,6 +784,8 @@ current_anim=%s
 	animation_tree.get("parameters/CombatSwitch/blend_amount"),
 	animation_tree.get("parameters/MeleeSkillSwitch/blend_amount"),
 	animation_tree.get("parameters/BaseATKSwitch/blend_amount"),
+
+	animation_tree.get("parameters/SkillTimeScale/scale"),
 
 	movement_mode,
 	animation.current_animation]
@@ -753,6 +856,7 @@ func collisionShapesManager()->void:
 	
 var movement_unlock_locks = [
 	"parry",
+	"guard",
 ]
 func clearMovementLocks()->void:
 	for lock_name in movement_unlock_locks:
@@ -991,11 +1095,12 @@ var stored_body_timer:int = 15
 var combat_timer:int =0
 func leaveCombatAutomatically()->void:
 	if stored_body == null:
-		if combat_timer > 0:
-			combat_timer -= 1
-			is_in_combat = true
-		if combat_timer <= 0:
-			is_in_combat = false
+		if attacking == false:
+			if combat_timer > 0:
+				combat_timer -= 1
+				is_in_combat = true
+			if combat_timer <= 0:
+				is_in_combat = false
 
 
 onready var left_ray:RayCast = $Turnable/Left
@@ -1099,7 +1204,9 @@ func checkFall():
 	if !was_on_floor and on_floor and is_airborne:
 		var landing_y = global_transform.origin.y
 		var fall_distance = highest_y - landing_y
-		applyFallDamage(fall_distance)
+		if attacking == false:
+			if current_skill == "" or current_skill == "none":
+				applyFallDamage(fall_distance)
 		is_airborne = false
 	was_on_floor = on_floor
 

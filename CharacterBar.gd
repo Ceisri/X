@@ -18,25 +18,9 @@ func updateBars():
 
 	tween.stop_all()
 
-	tween.interpolate_property(
-		hpBar,
-		"value",
-		hpBar.value,
-		stats.health,
-		0.3,
-		Tween.TRANS_SINE,
-		Tween.EASE_OUT
-	)
+	tween.interpolate_property(hpBar,"value",hpBar.value,stats.health,0.3,Tween.TRANS_SINE,Tween.EASE_OUT)
 
-	tween.interpolate_property(
-		apBar,
-		"value",
-		apBar.value,
-		stats.arcane,
-		0.3,
-		Tween.TRANS_SINE,
-		Tween.EASE_OUT
-	)
+	tween.interpolate_property(apBar,"value",apBar.value,stats.energy,0.3,Tween.TRANS_SINE,Tween.EASE_OUT)
 
 	tween.start()
 

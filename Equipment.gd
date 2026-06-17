@@ -230,8 +230,8 @@ func updateHands() -> void:
 func updateFeet() -> void:
 	current_feet_node = replaceEquipmentNode(current_feet_node,feet_scene)
 
-const SWORD_SCENE = preload("res://world/weapons/scenes/sword1.tscn")
-const FORK_SCENE = preload("res://world/weapons/scenes/fork1.tscn")
+const SWORD_SCENE = preload("res://world/player/weapons/Sword.tscn")
+const FORK_SCENE = preload("res://world/player/weapons/Sword.tscn")
 const SHIELD_SCENE = preload("res://world/player/weapons/Shield.tscn")
 
 

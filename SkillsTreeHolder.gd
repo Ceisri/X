@@ -8,7 +8,7 @@ var last_pos := Vector2()
 
 
 var skills = {
-	"cleave":0,
+	"combo attack":1,
 	"battlecry":0,
 	"onslaught":0,
 	"overhead_strike":0

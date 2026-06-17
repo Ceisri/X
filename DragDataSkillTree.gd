@@ -1,8 +1,9 @@
 extends TextureButton
-
-onready var icon = $Slot
-onready var level_label = $Level
-onready var skill_tree_node = get_parent().get_parent()
+onready var icon:TextureRect = $Slot
+onready var level_label:Label = $Level
+onready var name_label:Label = $Name
+onready var skill_tree_node:Control = get_parent().get_parent()
+onready var Player:KinematicBody = $"../../../../.."
 
 export(Array, NodePath) var connected_skill_buttons
 
@@ -16,6 +17,7 @@ var branch_lines = []
 
 
 func _ready():
+	call_deferred("loadData")
 	connect("pressed",self,"skillPressed")
 	updateLevel()
 
@@ -40,6 +42,35 @@ func _ready():
 				"line":line,
 				"target":target
 			})
+	nameLabelDisplay()
+func nameLabelDisplay()->void:
+	if name_label != null and icon != null and icon.texture != null:
+		var texture_path = icon.texture.resource_path
+
+		for skill_name in Skills.skills:
+			if typeof(Skills.skills[skill_name]) != TYPE_OBJECT:
+				continue
+
+			var skill_texture = Skills.skills[skill_name]
+
+			if skill_texture == null:
+				continue
+
+			if skill_texture.resource_path == texture_path:
+				var clean_name = ""
+
+				for c in skill_name:
+					if c >= "a" and c <= "z":
+						clean_name += c
+					elif c >= "A" and c <= "Z":
+						clean_name += c
+					elif c == " ":
+						clean_name += c
+
+				name_label.text = clean_name
+				break
+
+
 
 func skillPressed()->void:
 	var stats = get_parent().get_parent().stats
@@ -132,3 +163,49 @@ func can_drop_data(position,data):
 
 func drop_data(position,data):
 	print("DROP EXECUTED")
+
+
+
+const SAVE_DIR = "user://Characters/"
+
+
+func saveData()->void:
+	var dir = Directory.new()
+	var save_dir = SAVE_DIR + Player.entity_name + "/"
+
+	if !dir.dir_exists(save_dir):
+		dir.make_dir_recursive(save_dir)
+
+	var file = File.new()
+
+	if file.open(save_dir + name + ".save", File.WRITE) == OK:
+		file.store_var({
+			"skill_level": skill_level,
+			"can_be_dragged": can_be_dragged,
+			"can_be_leveled": can_be_leveled
+		})
+		file.close()
+
+
+func loadData()->void:
+	var file = File.new()
+	var path = SAVE_DIR + Player.entity_name + "/" + name + ".save"
+
+	if !file.file_exists(path):
+		return
+
+	if file.open(path, File.READ) == OK:
+		var data = file.get_var()
+
+		if data.has("skill_level"):
+			skill_level = data["skill_level"]
+
+		if data.has("can_be_dragged"):
+			can_be_dragged = data["can_be_dragged"]
+
+		if data.has("can_be_leveled"):
+			can_be_leveled = data["can_be_leveled"]
+
+		file.close()
+
+	updateLevel()
