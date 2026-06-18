@@ -231,7 +231,7 @@ func updateFeet() -> void:
 	current_feet_node = replaceEquipmentNode(current_feet_node,feet_scene)
 
 const SWORD_SCENE = preload("res://world/player/weapons/Sword.tscn")
-const FORK_SCENE = preload("res://world/player/weapons/Sword.tscn")
+const FORK_SCENE = preload("res://world/player/weapons/Greatsword.tscn")
 const SHIELD_SCENE = preload("res://world/player/weapons/Shield.tscn")
 
 
@@ -245,10 +245,10 @@ onready var bone_holder_hipL:BoneAttachment = $"../../character/root/Skeleton/Hi
 onready var bone_holder_back:BoneAttachment =$"../../character/root/Skeleton/Back"
 onready var bone_holder_back_shield:BoneAttachment = $"../../character/root/Skeleton/ShieldBack"
 func updateWeapons() -> void:
-	var inventory_grid: GridContainer = $"../Inventory/ScrollContainer/GridContainer"
-	var inventory: Control = $"../Inventory"
+	var inventory_grid:GridContainer = $"../Inventory/ScrollContainer/GridContainer"
+	var inventory:Control = $"../Inventory"
 
-	for n in [current_main_weapon_node, current_offhand_weapon_node]:
+	for n in [current_main_weapon_node,current_offhand_weapon_node]:
 		if is_instance_valid(n):
 			n.queue_free()
 
@@ -262,9 +262,8 @@ func updateWeapons() -> void:
 		if slot_offhand.texture:
 			for w in Items.weapons.values():
 				if w["icon"] == slot_offhand.texture:
-					CommonBehaviours.addNotStackableItem(inventory_grid, w, inventory)
+					CommonBehaviours.addNotStackableItem(inventory_grid,w,inventory)
 					break
-
 			slot_offhand.texture = null
 
 		return
@@ -273,7 +272,7 @@ func updateWeapons() -> void:
 
 	for w in Items.weapons.values():
 		if w["icon"] == slot_mainhand.texture:
-			two_handed = w.get("two handed", false)
+			two_handed = w.get("two handed",false)
 			break
 
 	slot_offhand.get_parent().visible = !two_handed
@@ -281,9 +280,8 @@ func updateWeapons() -> void:
 	if two_handed and slot_offhand.texture:
 		for w in Items.weapons.values():
 			if w["icon"] == slot_offhand.texture:
-				CommonBehaviours.addNotStackableItem(inventory_grid, w, inventory)
+				CommonBehaviours.addNotStackableItem(inventory_grid,w,inventory)
 				break
-
 		slot_offhand.texture = null
 
 	var sword = Items.weapons["sword"]["icon"].resource_path
@@ -293,22 +291,23 @@ func updateWeapons() -> void:
 	var mh = slot_mainhand.texture.resource_path if slot_mainhand.texture else ""
 	var oh = slot_offhand.texture.resource_path if slot_offhand.texture else ""
 
-	var main_holder: BoneAttachment
-	var offhand_holder: Node
+	var main_holder:BoneAttachment
+	var offhand_holder:Node
 
 	if player.is_in_combat:
 		main_holder = bone_holder_right
 		offhand_holder = bone_holder_left
 	else:
-		if two_handed:
-			main_holder = bone_holder_back
-		else:
-			main_holder = bone_holder_hipR
+		main_holder = bone_holder_back if two_handed else bone_holder_hipR
+		offhand_holder = bone_holder_back_shield if oh == shield else bone_holder_hipL
 
-		if oh == shield:
-			offhand_holder = bone_holder_back_shield
-		else:
-			offhand_holder = bone_holder_hipL
+	bone_holder_hipR.rotation_degrees = Vector3(40,-85,-12)
+	bone_holder_hipR.translation = Vector3(-20,25,0)
+	bone_holder_hipR.scale = Vector3(0.95,0.95,0.95)
+
+	bone_holder_hipL.rotation_degrees = Vector3(40,85,12)
+	bone_holder_hipL.translation = Vector3(20,25,0)
+	bone_holder_hipL.scale = Vector3(0.95,0.95,0.95)
 
 	if mh == sword:
 		current_main_weapon_node = SWORD_SCENE.instance()
@@ -356,6 +355,120 @@ func updateWeapons() -> void:
 	else:
 		player.weapons = player.WeaponMode.NONE
 
+
+
+#func updateWeapons() -> void:
+#	var inventory_grid: GridContainer = $"../Inventory/ScrollContainer/GridContainer"
+#	var inventory: Control = $"../Inventory"
+#
+#	for n in [current_main_weapon_node, current_offhand_weapon_node]:
+#		if is_instance_valid(n):
+#			n.queue_free()
+#
+#	current_main_weapon_node = null
+#	current_offhand_weapon_node = null
+#	player.weapons = player.WeaponMode.NONE
+#
+#	if !slot_mainhand.texture:
+#		slot_offhand.get_parent().visible = false
+#
+#		if slot_offhand.texture:
+#			for w in Items.weapons.values():
+#				if w["icon"] == slot_offhand.texture:
+#					CommonBehaviours.addNotStackableItem(inventory_grid, w, inventory)
+#					break
+#
+#			slot_offhand.texture = null
+#
+#		return
+#
+#	var two_handed = false
+#
+#	for w in Items.weapons.values():
+#		if w["icon"] == slot_mainhand.texture:
+#			two_handed = w.get("two handed", false)
+#			break
+#
+#	slot_offhand.get_parent().visible = !two_handed
+#
+#	if two_handed and slot_offhand.texture:
+#		for w in Items.weapons.values():
+#			if w["icon"] == slot_offhand.texture:
+#				CommonBehaviours.addNotStackableItem(inventory_grid, w, inventory)
+#				break
+#
+#		slot_offhand.texture = null
+#
+#	var sword = Items.weapons["sword"]["icon"].resource_path
+#	var fork = Items.weapons["fork"]["icon"].resource_path
+#	var shield = Items.weapons["shield"]["icon"].resource_path
+#
+#	var mh = slot_mainhand.texture.resource_path if slot_mainhand.texture else ""
+#	var oh = slot_offhand.texture.resource_path if slot_offhand.texture else ""
+#
+#	var main_holder: BoneAttachment
+#	var offhand_holder: Node
+#
+#	if player.is_in_combat:
+#		main_holder = bone_holder_right
+#		offhand_holder = bone_holder_left
+#	else:
+#		if two_handed:
+#			main_holder = bone_holder_back
+#		else:
+#			main_holder = bone_holder_hipR
+#
+#		if oh == shield:
+#			offhand_holder = bone_holder_back_shield
+#		else:
+#			offhand_holder = bone_holder_hipL
+#
+#	if mh == sword:
+#		current_main_weapon_node = SWORD_SCENE.instance()
+#		_remove_materials(current_main_weapon_node)
+#		setUnshaded(current_main_weapon_node)
+#		main_holder.add_child(current_main_weapon_node)
+#
+#	elif mh == fork:
+#		current_main_weapon_node = FORK_SCENE.instance()
+#		_remove_materials(current_main_weapon_node)
+#		setUnshaded(current_main_weapon_node)
+#		main_holder.add_child(current_main_weapon_node)
+#
+#	if oh == sword:
+#		current_offhand_weapon_node = SWORD_SCENE.instance()
+#		_remove_materials(current_offhand_weapon_node)
+#		setUnshaded(current_offhand_weapon_node)
+#		offhand_holder.add_child(current_offhand_weapon_node)
+#
+#	elif oh == fork:
+#		current_offhand_weapon_node = FORK_SCENE.instance()
+#		_remove_materials(current_offhand_weapon_node)
+#		setUnshaded(current_offhand_weapon_node)
+#		offhand_holder.add_child(current_offhand_weapon_node)
+#
+#	elif oh == shield:
+#		current_offhand_weapon_node = SHIELD_SCENE.instance()
+#		_remove_materials(current_offhand_weapon_node)
+#		setUnshaded(current_offhand_weapon_node)
+#
+#		var shield_slot = $Shield/Slot
+#		if shield_slot:
+#			offhand_holder.add_child(shield_slot)
+#
+#		offhand_holder.add_child(current_offhand_weapon_node)
+#
+#	if mh == fork:
+#		player.weapons = player.WeaponMode.TWO_HANDED
+#	elif mh == sword and oh == sword:
+#		player.weapons = player.WeaponMode.DUAL
+#	elif mh == sword and oh == shield:
+#		player.weapons = player.WeaponMode.SHIELD
+#	elif mh == sword:
+#		player.weapons = player.WeaponMode.SWORD
+#	else:
+#		player.weapons = player.WeaponMode.NONE
+#
 
 
 func saveData() -> void:

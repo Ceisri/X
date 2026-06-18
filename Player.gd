@@ -68,8 +68,6 @@ var anim_locks = {
 	"fury strike":false,
 	"sadistic blow":false,
 	"sunder" :false,
-	"compas slash":false,
-	"sweeping slash":false,
 	"heart thrust":false,
 	"obliteration":false,
 	"obliteration charge":false,
@@ -100,6 +98,7 @@ var anim_locks = {
 
 
 func _ready():
+	animation.set_script(load("res://world/player/scenes/AnimationPlayer.gd"))
 	for child in $UI/Skillbar/GridContainer.get_children():
 		child.get_node("Slot").player=self
 		child.get_node("TextureButton").parent=self
@@ -154,22 +153,12 @@ func getActiveAnimLock()->String:
 	return ""
 
 
-
-var combat_idle_animations = {
-	WeaponMode.NONE:"0_Idle_cycle",
-	WeaponMode.SWORD:"2h_Idle_cycle",
-	WeaponMode.DUAL:"2h_Idle_cycle",
-	WeaponMode.SHIELD:"2h_Idle_cycle",
-	WeaponMode.TWO_HANDED:"IdleTwoHanded_cycle",
-}
-onready var combat_idle = animation_tree.tree_root.get_node("CombatIdle")
-onready var combat_idle_skill_smooth = animation_tree.tree_root.get_node("IdleForSkill")
-var skill_animations = {
+var skill_animations = {#remember to replace placeholders
 	"combo attack":{
-		WeaponMode.NONE:"ComboATK_TwoHanded_cycle",
-		WeaponMode.SWORD:"ComboATK_TwoHanded_cycle",
-		WeaponMode.DUAL:"ComboATK_TwoHanded_cycle",
-		WeaponMode.SHIELD:"ComboATK_TwoHanded_cycle",
+		WeaponMode.NONE:"ComboATK_OneHanded_cycle",
+		WeaponMode.SWORD:"ComboATK_OneHanded_cycle",
+		WeaponMode.DUAL:"ComboATK_OneHanded_cycle",
+		WeaponMode.SHIELD:"ComboATK_OneHanded_cycle",
 		WeaponMode.TWO_HANDED:"ComboATK_TwoHanded_cycle",
 	},
 	
@@ -237,12 +226,6 @@ var skill_animations = {
 		WeaponMode.SHIELD:"Berserk_HeartThrust_OneHanded",
 		WeaponMode.TWO_HANDED:"Berserk_HeartThrust_TwoHanded",
 	},
-	"obliteration start":{
-		WeaponMode.SWORD:"Berserk_ObliterationCharge_Start",
-		WeaponMode.DUAL:"Berserk_ObliterationCharge_Start",
-		WeaponMode.SHIELD:"Berserk_ObliterationCharge_Start",
-		WeaponMode.TWO_HANDED:"Berserk_ObliterationCharge_Start",
-	},
 	"obliteration charge":{
 		WeaponMode.SWORD:"Berserk_ObliterationCharge_cycle",
 		WeaponMode.DUAL:"Berserk_ObliterationCharge_cycle",
@@ -256,9 +239,6 @@ var skill_animations = {
 		WeaponMode.TWO_HANDED:"Berserk_SadisticBlow_TwoHanded",
 	},
 
-
-	
-	
 	"death from above":{
 		WeaponMode.NONE:"ALL_DeathFromAbove",
 		WeaponMode.SWORD:"ALL_DeathFromAbove",
@@ -318,14 +298,6 @@ var skill_animations = {
 	},
 }
 var last_skill_animation:String =""
-func setCombatIdleAnimation()->void:
-	if !combat_idle_animations.has(weapons):
-		return
-	var anim = combat_idle_animations[weapons]
-
-	combat_idle.animation = anim
-	combat_idle_skill_smooth.animation = anim
-
 
 """
 Assigns the correct animation for a skill based on the player's current
@@ -458,6 +430,52 @@ func safeGetBlend(path:String) -> float:
 	return float(value)
 
 
+
+var combat_walk_animations = {
+	WeaponMode.NONE:"Walk_OneHandedCombat_cycle",
+	WeaponMode.SWORD:"Walk_OneHandedCombat_cycle",
+	WeaponMode.DUAL:"Walk_OneHandedCombat_cycle",
+	WeaponMode.SHIELD:"Walk_OneHandedCombat_cycle",
+	WeaponMode.TWO_HANDED:"Walk_TwoHandedCombat_cycle",
+}
+var combat_run_animations = {
+	WeaponMode.NONE:"Walk_OneHandedCombat_cycle",
+	WeaponMode.SWORD:"Run_OneHandedCombat_cycle",
+	WeaponMode.DUAL:"Run_OneHandedCombat_cycle",
+	WeaponMode.SHIELD:"Run_OneHandedWithShieldCombat_cycle",
+	WeaponMode.TWO_HANDED:"Run_TwoHandedCombat_cycle",
+}
+var combat_idle_animations = {
+	WeaponMode.NONE:"IdleOneHanded_cycle",
+	WeaponMode.SWORD:"IdleOneHanded_cycle",
+	WeaponMode.DUAL:"IdleOneHanded_cycle",
+	WeaponMode.SHIELD:"IdleOneHanded_cycle",
+	WeaponMode.TWO_HANDED:"IdleTwoHanded_cycle",
+}
+onready var combat_idle = animation_tree.tree_root.get_node("CombatIdle")
+onready var combat_walk = animation_tree.tree_root.get_node("WalkCombat")
+onready var run_node = animation_tree.tree_root.get_node("RunCombat")
+onready var combat_idle_skill_smooth = animation_tree.tree_root.get_node("IdleForSkill")
+func setCombatIdleAnimation()->void:
+	if !combat_idle_animations.has(weapons):
+		return
+	var anim = combat_idle_animations[weapons]
+
+	combat_idle.animation = anim
+	combat_idle_skill_smooth.animation = anim
+func setCombatWalkAnimation()->void:
+	if !combat_walk_animations.has(weapons):
+		return
+	var anim = combat_walk_animations[weapons]
+
+	combat_walk.animation = anim
+func setRunAnimation()->void:
+	if !combat_run_animations.has(weapons):
+		return
+	var anim = combat_run_animations[weapons]
+
+	combat_run_animations.animation = anim
+
 var skillExitBlendSpeed:float = 2.0
 func animationOrder() -> void:
 	#leave animaiton_tree off by default 
@@ -488,33 +506,7 @@ func animationOrder() -> void:
 	else:
 		anim_locks["stunned"] = false
 		anim_locks["staggered"] = false
-		if flip_blend_timer > 0.0:
-			unlockAnim()
-			flip_blend_timer -= delta
 
-		if dodge_cleanup_timer > 0.0:
-			dodge_cleanup_timer = max(dodge_cleanup_timer - delta, 0.0)
-
-			if !dodge_cleanup_reset:
-				dodge_cleanup_reset = true
-				last_active_skill = ""
-
-				skill_anim.animation = skill_animations["parry"][weapons]
-
-				animation_tree.set("parameters/CombatSwitch/blend_amount",1.0)
-				animation_tree.set("parameters/MeleeSkillSwitch/blend_amount",1.0)
-
-				anim_blend_cache["parameters/CombatSwitch/blend_amount"] = 1.0
-				anim_blend_cache["parameters/MeleeSkillSwitch/blend_amount"] = 1.0
-
-			return
-		else:
-			if dodge_cleanup_reset:
-				setAnimBlend("parameters/CombatSwitch/blend_amount",0.0,dodge_cleanup_blend_speed,delta)
-
-				setAnimBlend("parameters/MeleeSkillSwitch/blend_amount",0.0,dodge_cleanup_blend_speed,delta)
-
-			dodge_cleanup_reset = false
 		# ============================================================
 		# SKILL / COMBAT STATE
 		# ============================================================
@@ -531,10 +523,6 @@ func animationOrder() -> void:
 				animation_tree.set("parameters/SkillTimeScale/scale", skill_scale)
 
 			return
-
-		# ============================================================
-		# NO ACTIVE SKILL
-		# ============================================================
 		# Character returns to movement locomotion state.
 		# ============================================================
 		last_active_skill=""
@@ -586,8 +574,7 @@ func animationOrder() -> void:
 					movement_target=-1.0
 					if is_in_combat:
 						setAnimBlend("parameters/IsInCombat/blend_amount",1.0,blend,delta)
-						if combat_idle_animations.has(weapons):
-							combat_idle.animation = combat_idle_animations[weapons]
+						setCombatIdleAnimation()
 
 					else:
 						setAnimBlend("parameters/IsInCombat/blend_amount",0.0,blend,delta)
@@ -599,16 +586,21 @@ func animationOrder() -> void:
 					movement_target=0.0
 					if is_in_combat == true:
 						animation_tree.set("parameters/WalkCombatOrNot/blend_amount",1)
+						setCombatWalkAnimation()
 					else:
 						animation_tree.set("parameters/WalkCombatOrNot/blend_amount",0)
 				# ----------------------------------------------------
 				# RUN
 				# ----------------------------------------------------
 				"run":
-					is_in_combat = false
+					if is_in_combat == true: 
+						setRunAnimation()
+						animation_tree.set("parameters/IsInCombatRun/blend_amount",1)
+					else:
+						animation_tree.set("parameters/IsInCombatRun/blend_amount",0)
 					movement_target=1.0
 					animation_tree.set("parameters/RunSpeed/scale",0.8+(0.0125*stats.derived_stats["run_speed"]))
-
+					
 				# ----------------------------------------------------
 				# CROUCH IDLE
 				# ----------------------------------------------------
@@ -739,6 +731,8 @@ func _physics_process(delta):
 		translation.z = 0
 		enableEntityCollisions()
 	if Input.is_action_just_pressed("0"):
+		is_in_combat = false
+		combat_timer = 0 
 		$character/root/Skeleton/Mesh.visible = !$character/root/Skeleton/Mesh.visible
 
 	$Label.text = """
@@ -884,17 +878,22 @@ func movement(delta) -> void:
 	# ==================================================
 	if can_move or !guarding:
 		if Input.is_action_pressed("left") and !is_climbing:
-			input_direction.x += 1
-			animation_tree.active = true
+			if anim_locks["guard"] == false:
+				animation_tree.active = true
+				input_direction.x += 1
 		elif Input.is_action_pressed("right") and !is_climbing:
-			input_direction.x -= 1
-			animation_tree.active = true
+			if anim_locks["guard"] == false:
+				animation_tree.active = true
+				input_direction.x -= 1
 		if Input.is_action_pressed("forward"):
-			input_direction.z += 1
-			animation_tree.active = true
+			if anim_locks["guard"] == false:
+				animation_tree.active = true
+				input_direction.z += 1
+			
 		elif Input.is_action_pressed("backward"):
-			input_direction.z -= 1
-			animation_tree.active = true
+			if anim_locks["guard"] == false:
+				animation_tree.active = true
+				input_direction.z -= 1
 
 	var movement_input = input_direction.length() > 0
 	if current_skill != "" or current_skill != "none":
@@ -951,12 +950,12 @@ func movement(delta) -> void:
 				movement_speed = walk_speed * 0.5
 				is_in_combat = false
 				combat_timer = 0 
+				animation_tree.active = true
 
 			elif sprinting and !is_in_water:
 				movement_speed = stats.derived_stats["run_speed"]
 				movement_mode = "run"
-				is_in_combat = false
-				combat_timer = 0 
+				animation_tree.active = true
 
 			else:
 				movement_mode = "walk"
@@ -970,6 +969,7 @@ func movement(delta) -> void:
 		else:
 			if crouching:
 				movement_mode = "crouch_idle"
+				animation_tree.active = true
 				is_in_combat = false
 				combat_timer = 0 
 			else:
@@ -1135,6 +1135,7 @@ func climb() -> void:
 		if is_on_wall() and climb_hit and head_hit and !left_hit and !right_hit and !is_on_floor():
 			if Input.is_action_pressed("forward") or Input.is_action_pressed("left") or Input.is_action_pressed("right") or Input.is_action_pressed("back"):
 				is_climbing = true
+
 				is_airborne = false
 				movement_mode = "climb"
 				var wall_normal = climb_ray.get_collision_normal()
@@ -1202,6 +1203,7 @@ func checkFall():
 	# Left ground
 	if was_on_floor and !on_floor:
 		is_airborne = true
+		is_in_combat = false
 		highest_y = global_transform.origin.y
 	# Track highest point reached while is_airborne
 	if is_airborne:
@@ -1234,6 +1236,7 @@ func _on_WaterLevelChest_area_shape_entered(area_rid, area, area_shape_index, lo
 		if !water_areas.has(area):
 			water_areas.append(area)
 		is_in_water = true
+		is_in_combat = false
 
 func _on_WaterLevelChest_area_shape_exited(area_rid, area, area_shape_index, local_shape_index):
 	if water_areas.has(area):

@@ -39,7 +39,7 @@ const ACTION_PREFIX2="mouse_slot_"
 
 
 
-const SKILL_INIT_PASSES = 3
+const SKILL_INIT_PASSES = 15
 func _ready():
 	loadKeybinds()
 	connectButtons()
@@ -80,6 +80,9 @@ func initializeSkillsToPreventAstupidFuckingBugIDontKnowHowToFix()->void:
 
 				var skill_data = getSkillData(slot)
 				if skill_data == null:
+					continue
+
+				if skill_data["skill_name"]=="combo attack":
 					continue
 
 				anim_calls.unlockAnim()
@@ -137,6 +140,8 @@ func holdInputs()->void:
 		if player.anim_locks.has(skill) and player.anim_locks[skill]:
 #__________________press to atk vs hold to atk for the base attack__________________________________
 			if skill=="combo attack" and combo_atk_mode_hold==false:
+				player.is_in_combat=true
+				player.combat_timer=10
 				if continue_combo_atk:
 					continue
 					
@@ -178,7 +183,18 @@ func holdInputs()->void:
 					player.current_skill=""
 
 			chargeSkill(still_held,skill)
+	if !player.anim_locks.get("combo attack",false):
+		for i in range(grid.get_child_count()):
+			var slot=grid.get_child(i).get_node("Slot")
+			if slot.texture==Skills.skills["combo attack"] and Input.is_action_pressed(ACTION_PREFIX+str(i)):
+				skills(slot)
+				return
 
+		for i in range(grid2.get_child_count()):
+			var slot=grid2.get_child(i).get_node("Slot")
+			if slot.texture==Skills.skills["combo attack"] and Input.is_action_pressed(ACTION_PREFIX2+str(i)):
+				skills(slot)
+				return
 
 
 var obl_color:=Color(1,1,1,1)
@@ -232,11 +248,9 @@ func updateChargeSkillColor(skill_name,max_stacks,color_points):
 			slot.modulate=data.color
 
 func chargeSkill(still_held_state,skill_name):
-	if skill_name=="guard":
-		if still_held_state:
-			player.anim_locks["guard"]=true
-			player.current_skill="guard"
-	elif skill_name!="obliteration charge":return
+	player.is_in_combat=true
+	player.combat_timer=10
+	if skill_name!="obliteration charge":return
 
 	var skill_resource_path=Skills.skills[skill_name].resource_path
 	if active_cooldowns.has(skill_resource_path):return
@@ -262,8 +276,12 @@ func chargeSkill(still_held_state,skill_name):
 		return
 
 	player.current_skill="obliteration"
+	
+	
+	var atk_speed=stats.derived_stats["attack_speed"]
+	var interval=int(max(1,40.0/atk_speed))
 
-	if Engine.get_physics_frames()%40==0:
+	if Engine.get_physics_frames()%interval==0:
 		var energy_cost_value=Skills.getEnergyCost(skill_name)
 		var max_health_value=stats.max_health
 
@@ -281,9 +299,21 @@ func chargeSkill(still_held_state,skill_name):
 
 
 
+func getChargeSkillStacks(path):
+	for skill_name in stats.charged_attack_stacks:
+		if Skills.skills.has(skill_name) and Skills.skills[skill_name].resource_path == path:
+			return int(stats.charged_attack_stacks[skill_name]["stacks"])
+	return -1
 
+func resetChargeSkillColor(skill_name):
+	if !chargeSkillColors.has(skill_name):
+		return
 
+	chargeSkillColors[skill_name].color=Color.white
 
+	for slot in chargeSkillColors[skill_name].slots:
+		if is_instance_valid(slot):
+			slot.modulate=Color.white
 
 
 
@@ -315,9 +345,15 @@ func getSkillData(slot):
 	}
 
 func skills(slot)->void:
+	player.is_in_combat=true
+	player.combat_timer=10
+
 	var data=getSkillData(slot)
-	var skill_name=data.skill_name
+	var skill_name
+	if data != null:
+		skill_name=data.skill_name
 	if skill_name == "guard":
+		anim_calls.unlockAnim()
 		player.anim_locks["guard"] = true
 	if input_lock: return
 	if data==null: return
@@ -327,10 +363,12 @@ func skills(slot)->void:
 	player.animation_tree.active = true
 	var is_hold=hold_skills.has(skill_name)
 	var is_combo=skill_name=="combo attack"
+	if is_combo:
+		for lock_name in player.anim_locks:
+			if lock_name!="combo attack" and player.anim_locks[lock_name]:
+				return
 	var is_exempt=is_combo or skill_name=="guard" or skill_name=="parry"
 
-	player.is_in_combat=true
-	player.combat_timer=10
 
 	if player.anim_locks.get("stunned",false) or player.anim_locks.get("staggered",false):
 		return
@@ -397,7 +435,8 @@ func delayedSkill(skill_name,path,energy_cost,slot):
 	
 func applySkill(skill_name,path,energy_cost,slot):
 	if active_cooldowns.has(path) and skill_name!="combo attack":return
-
+	if player.current_skill=="obliteration" or player.current_skill=="obliteration charge":
+		resetChargeSkillColor("obliteration")
 	if skill_name!="combo attack":
 		player.unlockAnim()
 		anim_calls.unlockAnim()
@@ -406,8 +445,10 @@ func applySkill(skill_name,path,energy_cost,slot):
 	player.dodge_cleanup_timer=0.0
 	player.dodge_cleanup_reset=false
 	player.anim_locks[skill_name]=true
-	player.current_skill=skill_name
+	player.is_in_combat=true
 	player.combat_timer=10
+	player.current_skill=skill_name
+
 	applyCooldownAndCost(skill_name,path,energy_cost)
 	tweenSkillIcons(skill_name,slot)
 
@@ -520,7 +561,6 @@ func updateCooldowns(delta):# I suspect this funciton is called twice somewhere 
 		active_cooldowns[key]=max(active_cooldowns[key]-delta *0.5 ,0.0)
 
 	inventory.inventoryCooldowns(delta)
-
 	for container in [grid,grid2]:
 		for holder in container.get_children():
 			var icon=holder.get_node("Slot")
@@ -531,6 +571,12 @@ func updateCooldowns(delta):# I suspect this funciton is called twice somewhere 
 				continue
 
 			var key=icon.texture.resource_path
+			var stacks=getChargeSkillStacks(key)
+
+			if stacks>0 and player.current_skill=="obliteration":
+				label.text=str(stacks)
+				continue
+
 			var has_skill_cd=Skills.cooldowns.has(key) and Skills.cooldowns[key]>0.0
 
 			if !has_skill_cd:
@@ -563,7 +609,7 @@ func updateCooldowns(delta):# I suspect this funciton is called twice somewhere 
 		label.text=str(int(ceil(max(t,0))))
 		if t<=0:
 			active_cooldowns.erase(key)
-			
+
 
 func matchInputSlot()->void:
 	for i in range(grid.get_child_count()):
@@ -572,6 +618,8 @@ func matchInputSlot()->void:
 			var slot=grid.get_child(i).get_node("Slot")
 			if slot.texture == Skills.skills["combo attack"] and !combo_atk_mode_hold:
 				if continue_combo_atk == true:
+					player.is_in_combat=true
+					player.combat_timer=10
 					combo_queue = min(combo_queue + 1, COMBO_QUEUE_MAX)
 			skills(slot)
 			return
@@ -582,6 +630,8 @@ func matchInputSlot()->void:
 			var slot=grid2.get_child(i).get_node("Slot")
 			if slot.texture == Skills.skills["combo attack"] and !combo_atk_mode_hold:
 				if continue_combo_atk == true:
+					player.is_in_combat=true
+					player.combat_timer=10
 					combo_queue = min(combo_queue + 1, COMBO_QUEUE_MAX)
 			skills(slot)
 			return

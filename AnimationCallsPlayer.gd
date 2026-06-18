@@ -51,14 +51,9 @@ func BerserkBasicCombo():
 
 
 func flipDirection()->void:
-	unlockAnim()
 	parent.direction = -parent.direction
 	parent.player_mesh.rotation.y += PI
 	parent.turnable.rotation.y += PI
-	parent.flip_blend_timer = 0.3
-	parent.dodge_cleanup_timer = 0.03
-	parent.dodge_cleanup_timer = 0.1
-	unlockAnim()
 
 	
 func disableCollisions()->void:
@@ -81,12 +76,13 @@ func enableCollisions()->void:
 
 func unlockAnim():
 	speed_up_combo_until.erase(parent.current_skill)
-	for key in parent.anim_locks:
-		parent.anim_locks[key] = false
-		parent.current_skill = "none"
-		parent.last_active_skill = ""
-		parent.animation_tree.active = false
-
+	if parent.current_skill != "combo attack":
+		for key in parent.anim_locks:
+			parent.anim_locks[key] = false
+			parent.current_skill = "none"
+			parent.last_active_skill = ""
+			parent.animation_tree.active = false
+			stats.charged_attack_stacks["obliteration"]["stacks"] = 0 
 
 
 
