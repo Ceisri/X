@@ -1,6 +1,6 @@
 extends Spatial
 
-var player_scene = preload("res://world/player/scenes/PlayerTemplate.tscn")
+var player_scene = preload("res://world/player/scenes/Player.tscn")
 
 var auto_save:bool = false
 
@@ -13,7 +13,7 @@ func removeBothersomeKeybinds()-> void:#Here just in case someone is using this 
 	InputMap.action_erase_events("ui_focus_next")
 	InputMap.action_erase_events("ui_focus_prev")
 func _physics_process(delta):
-	if Engine.get_physics_frames() %1200 == 0:
+	if Engine.get_physics_frames() %3600 == 0:
 		if auto_save:
 			saveData()
 			saveRecursive(self)
@@ -63,47 +63,59 @@ func removeMob():
 #__________________________________SAVE_________________________________________
 
 func saveData():
-	var saveDirectory = "user://" + name + "/"
-	var savePath = saveDirectory + name + ".save"
-	var dir = Directory.new()
+	var saveDirectory="user://"+name+"/"
+	var savePath=saveDirectory+name+".save"
+	var dir=Directory.new()
 
 	if !dir.dir_exists(saveDirectory):
 		dir.make_dir_recursive(saveDirectory)
 
-	var entityData = []
+	var entityData=[]
 
 	for entity in get_children():
-		if is_instance_valid(entity):
-			if entity.is_in_group("Entity"):
-				entityData.append(buildSaveEntry(entity))
+		if !is_instance_valid(entity):
+			continue
 
-	var file = File.new()
+		if entity.is_in_group("Entity") or entity is ViewportContainer:
+			entityData.append(buildSaveEntry(entity))
 
-	if file.open(savePath,File.WRITE) == OK:
+	var file=File.new()
+
+	if file.open(savePath,File.WRITE)==OK:
 		file.store_var({"mobs":entityData})
 		file.close()
 
 func buildSaveEntry(entity):
-	var save_entry = {
+	var save_entity=entity
+
+	if entity is ViewportContainer:
+		var viewport=entity.get_node("Viewport")
+		if viewport.get_child_count()>0:
+			save_entity=viewport.get_child(0)
+
+	var stats=save_entity.get_node("Stats")
+
+	var save_entry={
 		"scene":entity.filename,
-		"node_name":entity.name,
-		"finished":safeStats(entity,"is_finished",false),
-		"position":entity.translation,
-		"rotation":entity.rotation,
-		"name":safeStats(entity,"Name",""),
-		"attributes":safeStats(entity,"attributes",{}).duplicate(true),
-		"attribute_points_spent":safeStats(entity,"attribute_points_spent",{}).duplicate(true),
-		"available_attribute_points": safeStats(entity,"available_attribute_points",0),
-		"nutrition":safeStats(entity,"nutrition",100),
-		"health":safeStats(entity,"health",100),
-		"is_sitting":safeGet(entity,"is_sitting",false),
-		"anim_locks":safeGet(entity,"anim_locks",{}).duplicate(true),
-		"aggro_target":getAggroTargetName(entity),
-		"aggro":saveAggro(entity)
+		"node_name":save_entity.name,
+		"finished":safeStats(save_entity,"is_finished",false),
+		"position":save_entity.translation,
+		"rotation":save_entity.rotation,
+		"name":safeStats(save_entity,"Name",""),
+		"attributes":safeStats(save_entity,"attributes",{}).duplicate(true),
+		"attribute_points_spent":safeStats(save_entity,"attribute_points_spent",{}).duplicate(true),
+		"available_attribute_points":safeStats(save_entity,"available_attribute_points",0),
+		"nutrition":safeStats(save_entity,"nutrition",100),
+		"health":safeStats(save_entity,"health",100),
+		"is_sitting":safeGet(save_entity,"is_sitting",false),
+		"anim_locks":safeGet(save_entity,"anim_locks",{}).duplicate(true),
+		"aggro_target":getAggroTargetName(save_entity),
+		"aggro":saveAggro(save_entity),
+		"statuses":stats.serializeStatuses(stats.statuses) if stats else {}
 	}
 
-	if entity.is_in_group("Player"):
-		savePlayerData(entity,save_entry)
+	if entity is ViewportContainer:
+		savePlayerData(save_entity,save_entry)
 
 	return save_entry
 
@@ -148,6 +160,7 @@ func getAggroTargetName(entity):
 
 	return combat_target.name
 
+
 func savePlayerData(entity,save_entry):
 	save_entry["camera_position"] = entity.camroot.camera.translation
 	save_entry["camera_rotation"] = entity.camroot.camera.rotation
@@ -163,20 +176,19 @@ func savePlayerData(entity,save_entry):
 #__________________________________LOAD_________________________________________
 
 func loadData():
-	var saveDirectory = "user://" + name + "/"
-	var savePath = saveDirectory + name + ".save"
-	var file = File.new()
+	var saveDirectory="user://"+name+"/"
+	var savePath=saveDirectory+name+".save"
+	var file=File.new()
 
 	if !file.file_exists(savePath):
 		CommonBehaviours.spawn(self,player_scene)
 		return
 
-	if file.open(savePath,File.READ) != OK:
+	if file.open(savePath,File.READ)!=OK:
 		CommonBehaviours.spawn(self,player_scene)
 		return
 
-	var data = file.get_var()
-
+	var data=file.get_var()
 	file.close()
 
 	if !data.has("mobs"):
@@ -184,19 +196,19 @@ func loadData():
 		return
 
 	for entity in get_children():
-		if entity.is_in_group("Entity"):
+		if entity.is_in_group("Entity") or entity is ViewportContainer:
 			entity.queue_free()
 
-	var loaded_mobs = []
-	var player = null
+	var loaded_mobs=[]
+	var player=null
 
 	for mobData in data["mobs"]:
 
-		if mobData["scene"] == player_scene.resource_path:
-			player = loadPlayer(mobData)
+		if mobData["scene"]==player_scene.resource_path:
+			player=loadPlayer(mobData)
 			continue
 
-		var mob = loadMob(mobData)
+		var mob=loadMob(mobData)
 
 		if mob:
 			loaded_mobs.append({
@@ -210,73 +222,91 @@ func loadData():
 	if !player:
 		CommonBehaviours.spawn(self,player_scene)
 
-
 func loadPlayer(mobData):
-	var player = CommonBehaviours.spawn(self,player_scene,mobData["position"],mobData["name"],mobData.get("nutrition",100),mobData.get("health",100),mobData.get("finished",false))
+	var player=CommonBehaviours.spawn(self,player_scene,mobData["position"],mobData["name"],mobData.get("nutrition",100),mobData.get("health",100),mobData.get("finished",false))
+	var entity=player
 
-	player.name = mobData.get("node_name",player.name)
-	player.rotation = mobData.get("rotation",player.rotation)
+	if player is ViewportContainer:
+		var viewport=player.get_node("Viewport")
+		entity=viewport.get_child(0)
 
-	player.camroot.camera.translation = mobData.get("camera_position",player.camroot.camera.translation)
-	player.camroot.camera.rotation = mobData.get("camera_rotation",player.camroot.camera.rotation)
+	entity.name=mobData.get("node_name",entity.name)
+	entity.rotation=mobData.get("rotation",entity.rotation)
 
-	player.camroot.cam_h.translation = mobData.get("cam_h_position",player.camroot.cam_h.translation)
-	player.camroot.cam_h.rotation = mobData.get("cam_h_rotation",player.camroot.cam_h.rotation)
+	entity.camroot.camera.translation=mobData.get("camera_position",entity.camroot.camera.translation)
+	entity.camroot.camera.rotation=mobData.get("camera_rotation",entity.camroot.camera.rotation)
 
-	player.camroot.cam_v.translation = mobData.get("cam_v_position",player.camroot.cam_v.translation)
-	player.camroot.cam_v.rotation = mobData.get("cam_v_rotation",player.camroot.cam_v.rotation)
+	entity.camroot.cam_h.translation=mobData.get("cam_h_position",entity.camroot.cam_h.translation)
+	entity.camroot.cam_h.rotation=mobData.get("cam_h_rotation",entity.camroot.cam_h.rotation)
 
-	player.camroot.camrot_h = mobData.get("camrot_h",player.camroot.camrot_h)
-	player.camroot.camrot_v = mobData.get("camrot_v",player.camroot.camrot_v)
+	entity.camroot.cam_v.translation=mobData.get("cam_v_position",entity.camroot.cam_v.translation)
+	entity.camroot.cam_v.rotation=mobData.get("cam_v_rotation",entity.camroot.cam_v.rotation)
 
-	player.character.rotation = mobData.get("character_rotation",player.character.rotation)
-	player.direction = mobData.get("direction",Vector3.ZERO)
-	var stats = player.get_node_or_null("Stats")
-	
-	if stats:
-		stats.attributes = mobData.get("attributes",stats.attributes)
-		stats.attribute_points_spent = mobData.get("attribute_points_spent",stats.attribute_points_spent)
-		stats.updateAttributes()
-		
-		
-		stats.available_attribute_points = mobData.get("available_attribute_points",stats.available_attribute_points)
-		
+	entity.camroot.camrot_h=mobData.get("camrot_h",entity.camroot.camrot_h)
+	entity.camroot.camrot_v=mobData.get("camrot_v",entity.camroot.camrot_v)
+
+	entity.character.rotation=mobData.get("character_rotation",entity.character.rotation)
+	entity.direction=mobData.get("direction",Vector3.ZERO)
+
+	var stats=entity.get_node("Stats")
+
+	stats.attributes=mobData.get("attributes",stats.attributes)
+	stats.attribute_points_spent=mobData.get("attribute_points_spent",stats.attribute_points_spent)
+	stats.updateAttributes()
+	stats.available_attribute_points=mobData.get("available_attribute_points",stats.available_attribute_points)
+
+	if mobData.has("statuses"):
+		stats.statuses=stats.deserializeStatuses(mobData["statuses"])
+
+	stats.updateAttributes()
+
 	return player
 
-
 func loadMob(mobData):
-	var scene = load(mobData["scene"])
-	if scene == null:
-		print("Load error: scene missing " + str(mobData["scene"]))
+	var scene=load(mobData["scene"])
+	if scene==null:
+		print("Load error: scene missing "+str(mobData["scene"]))
 		return null
-	var saved_health = mobData.get("health", -1)
-	var mob = CommonBehaviours.spawn(self,scene,mobData["position"],mobData["name"],mobData.get("nutrition", 100),saved_health,mobData.get("finished", false))
+
+	var saved_health=mobData.get("health",-1)
+	var mob=CommonBehaviours.spawn(self,scene,mobData["position"],mobData["name"],mobData.get("nutrition",100),saved_health,mobData.get("finished",false))
+
 	if !is_instance_valid(mob):
 		print("Load error: failed spawn")
 		return null
 
-	mob.name = mobData.get("node_name", mob.name)
-	mob.rotation = mobData.get("rotation", mob.rotation)
+	var entity=mob
 
-	if mob.get("is_sitting") != null:
-		mob.is_sitting = mobData.get("is_sitting", false)
+	if mob is ViewportContainer:
+		var viewport=mob.get_node("Viewport")
+		entity=viewport.get_child(0)
 
-	if mob.get("anim_locks") != null:
-		var saved_locks = mobData.get("anim_locks", {})
+	entity.name=mobData.get("node_name",entity.name)
+	entity.rotation=mobData.get("rotation",entity.rotation)
+
+	if entity.get("is_sitting")!=null:
+		entity.is_sitting=mobData.get("is_sitting",false)
+
+	if entity.get("anim_locks")!=null:
+		var saved_locks=mobData.get("anim_locks",{})
 		for key in saved_locks:
-			if mob.anim_locks.has(key):
-				mob.anim_locks[key] = saved_locks[key]
+			if entity.anim_locks.has(key):
+				entity.anim_locks[key]=saved_locks[key]
 			else:
-				print("Load warning: unknown anim lock " + str(key))
+				print("Load warning: unknown anim lock "+str(key))
 
-	var stats = mob.get_node_or_null("Stats")
-	if stats:
-		stats.attributes = mobData.get("attributes", stats.attributes)
-		stats.attribute_points_spent = mobData.get("attribute_points_spent", stats.attribute_points_spent)
-		stats.updateAttributes()
+	var stats=entity.get_node("Stats")
+
+	stats.attributes=mobData.get("attributes",stats.attributes)
+	stats.attribute_points_spent=mobData.get("attribute_points_spent",stats.attribute_points_spent)
+	stats.updateAttributes()
+
+	if mobData.has("statuses"):
+		stats.statuses=stats.deserializeStatuses(mobData["statuses"])
+
+	stats.updateAttributes()
 
 	return mob
-
 
 
 func restoreAggro(loaded_mobs):
