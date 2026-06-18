@@ -42,8 +42,10 @@ var root_motion_active := false
 var last_root_pos := Vector3.ZERO
 var root_motion_velocity := Vector3.ZERO
 var _last_root_motion_pos := Vector3.ZERO
-var is_climbing := false
+var is_climbing:bool= false
 onready var animation_tree:AnimationTree = $AnimationTree
+onready var skill_anim = animation_tree.tree_root.get_node("Skill")
+
 enum WeaponMode {
 	NONE,
 	SWORD,
@@ -72,7 +74,7 @@ var anim_locks = {
 	"obliteration":false,
 	"obliteration charge":false,
 	"obliteration start":false,
-	"execution":false,
+	"sledge":false,
 	
 
 	"backstep":false,
@@ -104,6 +106,7 @@ func _ready():
 		child.get_node("Slot").loadData()
 	direction=Vector3.BACK.rotated(Vector3.UP,$Camroot/h.global_transform.basis.get_euler().y)
 	initializeAnimationBlends()
+
 
 var interrupt_groups = {
 	"hard_interrupt":["dodge","block","parry"],
@@ -178,10 +181,10 @@ var skill_animations = {
 		WeaponMode.TWO_HANDED:"Berserk_Raze_TwoHanded",
 	},
 	"reckless vengeance":{
-		WeaponMode.SWORD:"Berserk_DeadlyGamble_ALL",
-		WeaponMode.DUAL:"Berserk_DeadlyGamble_ALL",
-		WeaponMode.SHIELD:"Berserk_DeadlyGamble_ALL",
-		WeaponMode.TWO_HANDED:"Berserk_DeadlyGamble_TwoHanded",
+		WeaponMode.SWORD:"Buff_OneHanded",
+		WeaponMode.DUAL:"Buff_OneHanded",
+		WeaponMode.SHIELD:"Buff_OneHanded",
+		WeaponMode.TWO_HANDED:"Buff_TwoHanded",
 	},
 	"stone splitter":{
 		WeaponMode.SWORD:"Berserk_StoneSplitter_OneHanded",
@@ -196,11 +199,11 @@ var skill_animations = {
 		WeaponMode.TWO_HANDED:"Berserk_BrutalChop_TwoHanded",
 	},
 	"shoulder bash":{
-		WeaponMode.NONE:"Berserk_OneHanded",
-		WeaponMode.SWORD:"Berserk_OneHanded",
-		WeaponMode.DUAL:"Berserk_OneHanded",
-		WeaponMode.SHIELD:"Berserk_OneHanded",
-		WeaponMode.TWO_HANDED:"Berserk_ShoulderBash",
+		WeaponMode.NONE:"Berserk_ShoulderBash_OneHanded",
+		WeaponMode.SWORD:"Berserk_ShoulderBash_OneHanded",
+		WeaponMode.DUAL:"Berserk_ShoulderBash_OneHanded",
+		WeaponMode.SHIELD:"Berserk_ShoulderBash_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_ShoulderBash_TwoHanded",
 	},
 	
 	"fury strike":{
@@ -222,11 +225,11 @@ var skill_animations = {
 		WeaponMode.SHIELD:"Berserk_Sunder_OneHanded",
 		WeaponMode.TWO_HANDED:"Berserk_Sunder_TwoHanded",
 	},
-	"sweeping slash":{
-		WeaponMode.SWORD:"1h_OverheadStrikeContinue",
-		WeaponMode.DUAL:"1h_OverheadStrikeContinue",
-		WeaponMode.SHIELD:"1h_OverheadStrikeContinue",
-		WeaponMode.TWO_HANDED:"1h_OverheadStrikeContinue",
+	"sledge":{
+		WeaponMode.SWORD:"Berserk_Sledge_OneHanded",
+		WeaponMode.DUAL:"Berserk_Sledge_OneHanded",
+		WeaponMode.SHIELD:"Berserk_Sledge_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_Sledge_TwoHanded",
 	},
 	"heart thrust":{
 		WeaponMode.SWORD:"Berserk_HeartThrust_OneHanded",
@@ -254,15 +257,6 @@ var skill_animations = {
 	},
 
 
-
-	"execution":{
-		WeaponMode.NONE:"Berserk_FuryStrike",
-		WeaponMode.SWORD:"Berserk_FuryStrike",
-		WeaponMode.DUAL:"Berserk_FuryStrike",
-		WeaponMode.SHIELD:"Berserk_FuryStrike",
-		WeaponMode.TWO_HANDED:"Berserk_FuryStrike",
-	},
-	
 	
 	
 	"death from above":{
@@ -301,11 +295,11 @@ var skill_animations = {
 		WeaponMode.TWO_HANDED:"1h_Slice",
 	},
 	"parry":{
-		WeaponMode.NONE:"ALL_SwordGuard_cycle",
-		WeaponMode.SWORD:"ALL_SwordGuard_cycle",
-		WeaponMode.DUAL:"ALL_SwordGuard_cycle",
-		WeaponMode.SHIELD:"ALL_SwordGuard_cycle",
-		WeaponMode.TWO_HANDED:"ALL_SwordGuard_cycle",
+		WeaponMode.NONE:"ALL_SwordGuard",
+		WeaponMode.SWORD:"ALL_SwordGuard",
+		WeaponMode.DUAL:"ALL_SwordGuard",
+		WeaponMode.SHIELD:"ALL_SwordGuard",
+		WeaponMode.TWO_HANDED:"Backstep",
 	},
 	"guard":{
 		WeaponMode.NONE:"ALL_SwordGuard_cycle",
@@ -324,8 +318,6 @@ var skill_animations = {
 	},
 }
 var last_skill_animation:String =""
-onready var skill_anim = animation_tree.tree_root.get_node("Skill")
-
 func setCombatIdleAnimation()->void:
 	if !combat_idle_animations.has(weapons):
 		return
@@ -410,7 +402,7 @@ var flip_blend_timer:float= 0.0
 var dodge_cleanup_timer:float= 0.0
 var dodge_cleanup_reset:bool= false
 var dodge_cleanup_blend_speed:float = 0.4
-var blend:float = 0.8
+var blend:float = 1
 func setAnimBlend(path:String, target:float, speed:float, delta:float) -> void:
 	var current:float = 0.0
 
@@ -464,19 +456,18 @@ func safeGetBlend(path:String) -> float:
 	if value == null:
 		return 0.0
 	return float(value)
-	
-	
-var skillExitBlendSpeed:float = 2.0
-func animationOrder()->void:
-	animation_tree.active=true
 
+
+var skillExitBlendSpeed:float = 2.0
+func animationOrder() -> void:
+	#leave animaiton_tree off by default 
 	var delta:float =get_process_delta_time()
 	var active_lock:=getActiveAnimLock()
 	var now = OS.get_ticks_msec() / 1000.0
-	var skill_scale:float =  stats.derived_stats["attack_speed"]
+	var skill_scale:float =  stats.derived_stats["attack_speed"] 
 	if anim_calls.speed_up_combo_until.has(active_lock):
 		if now < anim_calls.speed_up_combo_until[active_lock]:
-			skill_scale = stats.derived_stats["attack_speed"] + 3
+			skill_scale =  stats.derived_stats["attack_speed"] + 3
 		else:
 			anim_calls.speed_up_combo_until.erase(active_lock)
 
@@ -596,8 +587,8 @@ func animationOrder()->void:
 					if is_in_combat:
 						setAnimBlend("parameters/IsInCombat/blend_amount",1.0,blend,delta)
 						if combat_idle_animations.has(weapons):
-
 							combat_idle.animation = combat_idle_animations[weapons]
+
 					else:
 						setAnimBlend("parameters/IsInCombat/blend_amount",0.0,blend,delta)
 
@@ -606,13 +597,16 @@ func animationOrder()->void:
 				# ----------------------------------------------------
 				"walk":
 					movement_target=0.0
-
+					if is_in_combat == true:
+						animation_tree.set("parameters/WalkCombatOrNot/blend_amount",1)
+					else:
+						animation_tree.set("parameters/WalkCombatOrNot/blend_amount",0)
 				# ----------------------------------------------------
 				# RUN
 				# ----------------------------------------------------
 				"run":
+					is_in_combat = false
 					movement_target=1.0
-
 					animation_tree.set("parameters/RunSpeed/scale",0.8+(0.0125*stats.derived_stats["run_speed"]))
 
 				# ----------------------------------------------------
@@ -768,6 +762,7 @@ SkillTimeScale=%s
 
 movement_mode=%s
 current_anim=%s
+animation_tree_active=%s
 """ % [
 	getActiveAnimLock(),
 	current_skill,
@@ -788,7 +783,9 @@ current_anim=%s
 	animation_tree.get("parameters/SkillTimeScale/scale"),
 
 	movement_mode,
-	animation.current_animation]
+	animation.current_animation,
+	animation_tree.active
+]
 	if stored_body != null:
 		is_in_combat = true
 	buoyancy(delta)
@@ -888,13 +885,16 @@ func movement(delta) -> void:
 	if can_move or !guarding:
 		if Input.is_action_pressed("left") and !is_climbing:
 			input_direction.x += 1
+			animation_tree.active = true
 		elif Input.is_action_pressed("right") and !is_climbing:
 			input_direction.x -= 1
-
+			animation_tree.active = true
 		if Input.is_action_pressed("forward"):
 			input_direction.z += 1
+			animation_tree.active = true
 		elif Input.is_action_pressed("backward"):
 			input_direction.z -= 1
+			animation_tree.active = true
 
 	var movement_input = input_direction.length() > 0
 	if current_skill != "" or current_skill != "none":
@@ -946,14 +946,17 @@ func movement(delta) -> void:
 	if !locked:
 		if direction != Vector3.ZERO:
 			moving = true
-
 			if crouching:
 				movement_mode = "crouch_moving"
 				movement_speed = walk_speed * 0.5
+				is_in_combat = false
+				combat_timer = 0 
 
 			elif sprinting and !is_in_water:
 				movement_speed = stats.derived_stats["run_speed"]
 				movement_mode = "run"
+				is_in_combat = false
+				combat_timer = 0 
 
 			else:
 				movement_mode = "walk"
@@ -967,6 +970,8 @@ func movement(delta) -> void:
 		else:
 			if crouching:
 				movement_mode = "crouch_idle"
+				is_in_combat = false
+				combat_timer = 0 
 			else:
 				movement_mode = "idle"
 
@@ -994,7 +999,8 @@ func movement(delta) -> void:
 	# ==================================================
 	# WATER OVERRIDE STATE
 	# ==================================================
-	if is_in_water:
+	if is_in_water == true:
+		animation_tree.active = true
 		if moving:
 			movement_mode = "swimming"
 			movement_speed = stats.derived_stats["swim_speed"]
@@ -1046,7 +1052,7 @@ var dash_start_speed:float = 0.0
 
 var last_dash_input = ""
 var last_dash_time = 0.0
-var dash_double_press_time = 0.25
+var dash_double_press_time = 0.15
 func dash()->void:
 	var current_input = ""
 	if Input.is_action_just_pressed("forward"):

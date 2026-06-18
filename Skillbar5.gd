@@ -139,11 +139,9 @@ func holdInputs()->void:
 			if skill=="combo attack" and combo_atk_mode_hold==false:
 				if continue_combo_atk:
 					continue
-					
 #___________________________________________________________________________________________________
 			var still_held:bool=false
-			if skill=="guard":
-				player.anim_locks["guard"]=true
+
 			for i in range(grid.get_child_count()):
 				var holder=grid.get_child(i)
 				var slot=holder.get_node("Slot")
@@ -178,7 +176,53 @@ func holdInputs()->void:
 					player.current_skill=""
 
 			chargeSkill(still_held,skill)
-
+#func holdInputs()->void:
+#	for skill in hold_skills.keys():
+#		if player.anim_locks.has(skill) and player.anim_locks[skill]:
+##__________________press to atk vs hold to atk for the base attack__________________________________
+#			if skill=="combo attack" and combo_atk_mode_hold==false:
+#				if continue_combo_atk:
+#					continue
+#
+##___________________________________________________________________________________________________
+#			var still_held:bool=false
+#			if skill=="guard":
+#				player.anim_locks["guard"]=true
+#			for i in range(grid.get_child_count()):
+#				var holder=grid.get_child(i)
+#				var slot=holder.get_node("Slot")
+#
+#				if slot.texture and Skills.skills.has(skill):
+#					if slot.texture==Skills.skills[skill]:
+#						var action_name=ACTION_PREFIX+str(i)
+#
+#						if Input.is_action_pressed(action_name):
+#							still_held=true
+#
+#						break
+#
+#			if !still_held:
+#				for i in range(grid2.get_child_count()):
+#					var holder=grid2.get_child(i)
+#					var slot=holder.get_node("Slot")
+#
+#					if slot.texture and Skills.skills.has(skill):
+#						if slot.texture==Skills.skills[skill]:
+#							var action_name=ACTION_PREFIX2+str(i)
+#
+#							if Input.is_action_pressed(action_name):
+#								still_held=true
+#
+#							break
+#
+#			if !still_held:
+#				player.anim_locks[skill]=false
+#
+#				if player.current_skill==skill:
+#					player.current_skill=""
+#
+#			chargeSkill(still_held,skill)
+#
 
 
 var obl_color:=Color(1,1,1,1)
@@ -315,13 +359,11 @@ func getSkillData(slot):
 	}
 
 func skills(slot)->void:
-	var data=getSkillData(slot)
-	var skill_name=data.skill_name
-	if skill_name == "guard":
-		player.anim_locks["guard"] = true
 	if input_lock: return
+	var data=getSkillData(slot)
 	if data==null: return
 
+	var skill_name=data.skill_name
 	var path=data.path
 	var energy_cost=data.energy_cost
 	player.animation_tree.active = true

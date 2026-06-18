@@ -43,7 +43,7 @@ var speed_up_combo_until = {}
 func speedUPtheNextATK(selected_atk:String):
 	speed_up_combo_until[selected_atk] = OS.get_ticks_msec() / 1000.0 + 4.0
 
-var BerserkComboTimer:float = 1.5
+var BerserkComboTimer:float = 2
 func BerserkBasicCombo():
 	var selected_atk:String = "stone splitter"
 	speed_up_combo_until[selected_atk] = OS.get_ticks_msec() / 1000.0 + BerserkComboTimer
@@ -78,11 +78,6 @@ func enableCollisions()->void:
 	
 
 
-func lockMov():
-	parent.can_move = false
-
-func canMove():
-	parent.can_move = true
 
 func unlockAnim():
 	speed_up_combo_until.erase(parent.current_skill)
@@ -90,38 +85,8 @@ func unlockAnim():
 		parent.anim_locks[key] = false
 		parent.current_skill = "none"
 		parent.last_active_skill = ""
+		parent.animation_tree.active = false
 
-
-
-	
-	
-
-
-
-func pushTarget(power:float):
-	for body in parent.dmg_area.get_overlapping_bodies():
-		if body == parent:
-			continue
-
-		if body is KinematicBody:
-			if body.has_node("Stats"):
-				var stats = body.stats
-
-				if stats and "can_be_moved" in stats:
-					if !stats.can_be_moved:
-						continue
-
-			var push_dir = (
-				body.global_transform.origin
-				- parent.global_transform.origin
-			).normalized()
-
-			push_dir.y = 0
-
-			body.move_and_slide(push_dir * power * 6.0)
-
-func die()->void:
-	parent.is_dead = true
 
 
 
