@@ -126,41 +126,50 @@ func useItem(button,inventory_grid,stats,floating_text_parent=null)->bool:
 
 
 
-func spawn(controller, scene, position=null, mob_name="", nutrition=100, health=-1, finished=false):
-	var mob = scene.instance()
+func spawn(controller,scene,position=null,mob_name="",nutrition=100,health=-1,finished=false):
+	var mob=scene.instance()
+	var entity=mob
+	var stats=null
 
-	var spawn_position = position if position != null else Vector3(
-		controller.global_transform.origin.x + rand_range(-10, 10),
-		controller.global_transform.origin.y,
-		controller.global_transform.origin.z + rand_range(-10, 10)
+	if mob is ViewportContainer:
+		var viewport=mob.get_node_or_null("Viewport")
+		if viewport:
+			for child in viewport.get_children():
+				if child is KinematicBody:
+					entity=child
+					stats=child.get_node_or_null("Stats")
+					break
+	else:
+		stats=mob.get_node_or_null("Stats")
+
+	var controller_pos=controller.global_transform.origin
+
+	var spawn_position=position if position!=null else Vector3(
+		controller_pos.x+rand_range(-10,10),
+		controller_pos.y,
+		controller_pos.z+rand_range(-10,10)
 	)
 
-	mob.translation = spawn_position
+	if entity is KinematicBody:
+		entity.global_transform.origin=spawn_position
 
-	var stats = mob.get_node("Stats")
+	if stats:
+		if mob_name=="" and stats.Names.size()>0:
+			mob_name=stats.Names[randi()%stats.Names.size()]
 
-	if mob_name == "":
-		mob_name = stats.Names[randi() % stats.Names.size()]
+		stats.Name=mob_name
+		stats.nutrition=nutrition
+		stats.health=stats.max_health if health==-1 else health
+		stats.is_finished=finished
 
-	stats.Name = mob_name
-	stats.nutrition = nutrition
-
-	if health == -1:
-		stats.health = stats.max_health
-	else:
-		stats.health = health
-
-	stats.is_finished = finished
-
-	mob.set_meta("state", "wander")
+	entity.set_meta("state","wander")
 	controller.add_child(mob)
 
 	return mob
-
-
-
-
-
+	
+	
+	
+	
 func gravity(mob):
 	var gravity = mob.stats.weight
 	if mob.ray_down:

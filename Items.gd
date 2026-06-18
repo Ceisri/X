@@ -208,8 +208,8 @@ var weapons = {
 		"two handed":false,
 		"description": "placeholder1",
 		"damages": {
-			"slash": 0.33,
-			"pierce": 0.3
+			"slash": 0.1,
+			"pierce": 0.1
 		}
 	},
 
@@ -220,7 +220,7 @@ var weapons = {
 		"two handed":true,
 		"description": "placeholder2",
 		"damages": {
-			"pierce":0.8,
+			"pierce":0.1,
 			"slash": 0.05
 		}
 	},
