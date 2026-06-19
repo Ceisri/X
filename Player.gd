@@ -665,13 +665,7 @@ func animationOrder() -> void:
 
 
 
-var combo_sequence:int = 1
-var combo_timer:float = 60.0
-func combatInputs()->void:
-	if anim_locks["combo attack"] == false:
-		combo_timer = max(combo_timer - 1.0, 0.0)
-	if anim_locks["parry"] == true:
-		guarding = true
+
 		
 
 export var root_motion_scale:float = 0.01
@@ -733,20 +727,10 @@ func _physics_process(delta):
 	if Input.is_action_just_pressed("0"):
 		is_in_combat = false
 		combat_timer = 0 
-		$character/root/Skeleton/Mesh.visible = !$character/root/Skeleton/Mesh.visible
+		$Label.visible = !$Label.visible
 
-	$Label.text = """
-active_lock=%s
+	$Label.text = """active_lock=%s
 current_skill=%s
-
-base_attack=%s
-cleave=%s
-section=%s
-perforation=%s
-parry=%s
-
-combo_seq=%s
-combo_timer=%s
 
 CombatSwitch=%s
 MeleeSkillSwitch=%s
@@ -758,28 +742,22 @@ movement_mode=%s
 current_anim=%s
 animation_tree_active=%s
 """ % [
-	getActiveAnimLock(),
-	current_skill,
+	str(getActiveAnimLock()),
+	str(current_skill),
 
-	anim_locks["combo attack"],
-	anim_locks["cleave"],
-	anim_locks["section"],
-	anim_locks["perforation trifecta"],
-	anim_locks["parry"],
+	str(animation_tree.get("parameters/CombatSwitch/blend_amount")),
+	str(animation_tree.get("parameters/MeleeSkillSwitch/blend_amount")),
+	str(animation_tree.get("parameters/BaseATKSwitch/blend_amount")),
 
-	combo_sequence,
-	combo_timer,
+	str(animation_tree.get("parameters/SkillTimeScale/scale")),
 
-	animation_tree.get("parameters/CombatSwitch/blend_amount"),
-	animation_tree.get("parameters/MeleeSkillSwitch/blend_amount"),
-	animation_tree.get("parameters/BaseATKSwitch/blend_amount"),
-
-	animation_tree.get("parameters/SkillTimeScale/scale"),
-
-	movement_mode,
-	animation.current_animation,
-	animation_tree.active
+	str(movement_mode),
+	str(animation.current_animation),
+	str(animation_tree.active)
 ]
+
+
+
 	if stored_body != null:
 		is_in_combat = true
 	buoyancy(delta)
@@ -791,7 +769,6 @@ animation_tree_active=%s
 	physics(delta)
 	collisionShapesManager()
 	if cursor_visible == false:
-		combatInputs()
 		dash()
 
 	if !movement_mode == "idle":
@@ -1107,7 +1084,9 @@ func leaveCombatAutomatically()->void:
 				is_in_combat = true
 			if combat_timer <= 0:
 				is_in_combat = false
-
+	if combat_timer <= 0: 
+		is_in_combat = false
+	
 
 onready var left_ray:RayCast = $Turnable/Left
 onready var right_ray:RayCast = $Turnable/Right
@@ -1173,6 +1152,8 @@ func jump()->void:
 		if Input.is_action_just_pressed("jump") and is_on_floor():
 			vertical_velocity = Vector3.UP * stats.derived_stats["jump_power"]
 			unlockAnim()
+			is_in_combat = false
+			combat_timer = 0 
 			attacking = false
 			guarding =false
 
@@ -1183,7 +1164,9 @@ func applyFallDamage(fall_distance: float):
 	var damage = (fall_distance - 3.0) * 5.0
 	damage /= (1.0 + stats.derived_stats["fall_resistance"])
 	stats.getHit(self,{stats.damage_type.blunt: damage},false,0.0,false)
-
+	is_in_combat = false
+	combat_timer = 0 
+	
 var was_on_floor := true
 var max_fall_speed := 0.0
 var fall_start_y := 0.0
@@ -1237,6 +1220,7 @@ func _on_WaterLevelChest_area_shape_entered(area_rid, area, area_shape_index, lo
 			water_areas.append(area)
 		is_in_water = true
 		is_in_combat = false
+		combat_timer = 0 
 
 func _on_WaterLevelChest_area_shape_exited(area_rid, area, area_shape_index, local_shape_index):
 	if water_areas.has(area):

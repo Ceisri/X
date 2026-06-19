@@ -360,7 +360,7 @@ func getRandItems()->void:
 	CommonBehaviours.addNotStackableItem(inventory_grid, Items.armors["torso1"], floating_text_parent)
 	CommonBehaviours.addNotStackableItem(inventory_grid, Items.armors["feet1"], floating_text_parent)
 	CommonBehaviours.addNotStackableItem(inventory_grid, Items.weapons["sword"], floating_text_parent)
-	CommonBehaviours.addNotStackableItem(inventory_grid, Items.weapons["fork"], floating_text_parent)
+	CommonBehaviours.addNotStackableItem(inventory_grid, Items.weapons["axe"], floating_text_parent)
 	CommonBehaviours.addNotStackableItem(inventory_grid, Items.weapons["shield"], floating_text_parent)
 	CommonBehaviours.addNotStackableItem(inventory_grid, Items.armors["hands1"], floating_text_parent)
 	CommonBehaviours.addNotStackableItem(inventory_grid, Items.armors["hands2"], floating_text_parent)
