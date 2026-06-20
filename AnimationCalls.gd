@@ -23,6 +23,11 @@ func unlockAnim():
 		$"../Combat".skill_lock = false
 	canMove()
 
+func dealDMG()->void:
+	stats.dealDamage()
+func applyBuff()->void:
+	stats.selfBuff()
+	
 
 
 var dash_power = 0.0

@@ -141,7 +141,7 @@ func holdInputs()->void:
 #__________________press to atk vs hold to atk for the base attack__________________________________
 			if skill=="combo attack" and combo_atk_mode_hold==false:
 				player.is_in_combat=true
-				player.combat_timer=10
+				
 				if continue_combo_atk:
 					continue
 					
@@ -249,7 +249,7 @@ func updateChargeSkillColor(skill_name,max_stacks,color_points):
 
 func chargeSkill(still_held_state,skill_name):
 	player.is_in_combat=true
-	player.combat_timer=10
+	
 	if skill_name!="obliteration charge":return
 
 	var skill_resource_path=Skills.skills[skill_name].resource_path
@@ -345,9 +345,10 @@ func getSkillData(slot):
 	}
 
 func skills(slot)->void:
-	player.is_in_combat=true
-	player.combat_timer=10
-
+	if player.is_dead == true:
+		return
+	if player.is_downed == true:
+		return
 	var data=getSkillData(slot)
 	var skill_name
 	if data != null:
@@ -446,7 +447,7 @@ func applySkill(skill_name,path,energy_cost,slot):
 	player.dodge_cleanup_reset=false
 	player.anim_locks[skill_name]=true
 	player.is_in_combat=true
-	player.combat_timer=10
+	
 	player.current_skill=skill_name
 
 	applyCooldownAndCost(skill_name,path,energy_cost)
@@ -619,7 +620,6 @@ func matchInputSlot()->void:
 			if slot.texture == Skills.skills["combo attack"] and !combo_atk_mode_hold:
 				if continue_combo_atk == true:
 					player.is_in_combat=true
-					player.combat_timer=10
 					combo_queue = min(combo_queue + 1, COMBO_QUEUE_MAX)
 			skills(slot)
 			return
@@ -631,7 +631,6 @@ func matchInputSlot()->void:
 			if slot.texture == Skills.skills["combo attack"] and !combo_atk_mode_hold:
 				if continue_combo_atk == true:
 					player.is_in_combat=true
-					player.combat_timer=10
 					combo_queue = min(combo_queue + 1, COMBO_QUEUE_MAX)
 			skills(slot)
 			return

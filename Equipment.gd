@@ -35,6 +35,16 @@ func _ready():
 	close_button.connect("pressed", self, "collapse")
 	loadData()
 
+func _physics_process(delta):
+	if Input.is_action_just_pressed("up"):
+		move_bone("HipHolder.l", 0, 0, -5)
+		move_bone("inverted.l", 0, 0, -5)
+		move_bone("HipHolder.r", 0, 0, 5)
+		move_bone("inverted.r", 0, 0, 5)
+	if Input.is_action_just_pressed("down"):
+		move_bone("HipHolder.l", 0, 0, 5)
+		move_bone("HipHolder.r", 0, 0, -5)
+
 
 func collapse() -> void:
 	hide()
@@ -251,6 +261,7 @@ onready var bone_holer_hips_invertedR:BoneAttachment = $"../../character/root/Sk
 
 
 func updateWeapons() -> void:
+	reset_bone_transform("weapon_r")
 	var inventory_grid:GridContainer = $"../Inventory/ScrollContainer/GridContainer"
 	var inventory:Control = $"../Inventory"
 
@@ -358,7 +369,25 @@ func updateWeapons() -> void:
 			offhand_holder = bone_holder_hipL
 
 	current_main_weapon_node = _spawn_weapon(main_weapon, main_holder)
+	if !player.is_in_combat:
 
+		var carry_type = main_weapon.get("carry", "")
+
+#		if carry_type == "hips inverted":
+#			# greataxes
+#			rotate_bone("inverted.r", 0,180,0)
+#			rotate_bone("inverted.l",  0,180,0)
+#
+#		elif carry_type == "back low":
+#			# greataxes on back
+#			rotate_bone("weapon_r", 0, 0,0)
+#
+#		elif carry_type == "back up":
+#			# greatswords on back
+#			rotate_bone("weapon_r", 0, 0, 0)
+#
+#		else:
+#			rotate_bone("weapon_r", 0, 0, 0)
 	if !offhand_weapon.empty():
 		current_offhand_weapon_node = _spawn_weapon(offhand_weapon, offhand_holder)
 
@@ -371,11 +400,13 @@ func updateWeapons() -> void:
 		var shield_holder:Node = bone_holder_shield if player.is_in_combat else bone_holder_back_shield
 		shield_holder.add_child(current_shield_node)
 
-	if two_handed:
-		player.weapons = player.WeaponMode.TWO_HANDED
 
-	elif !shield_weapon.empty():
+	# force shield mode if a shield node actually exists
+	if is_instance_valid(current_shield_node):
 		player.weapons = player.WeaponMode.SHIELD
+
+	elif two_handed:
+		player.weapons = player.WeaponMode.TWO_HANDED
 
 	elif !offhand_weapon.empty():
 		player.weapons = player.WeaponMode.DUAL
@@ -386,7 +417,109 @@ func updateWeapons() -> void:
 	else:
 		player.weapons = player.WeaponMode.NONE
 
+	var mode_name = "NONE"
 
+	match player.weapons:
+		player.WeaponMode.NONE:
+			mode_name = "NONE"
+
+		player.WeaponMode.SWORD:
+			mode_name = "SWORD"
+
+		player.WeaponMode.DUAL:
+			mode_name = "DUAL"
+
+		player.WeaponMode.SHIELD:
+			mode_name = "SHIELD"
+
+		player.WeaponMode.TWO_HANDED:
+			mode_name = "TWO_HANDED"
+
+	$"../../Label".text = mode_name
+
+	
+	
+	
+	
+
+var bone_default_rest = {}
+
+func cache_bone_rest(bone_name:String) -> void:
+	if bone_default_rest.has(bone_name):
+		return
+
+	var bone_idx = skeleton.find_bone(bone_name)
+	if bone_idx == -1:
+		return
+
+	bone_default_rest[bone_name] = skeleton.get_bone_rest(bone_idx)
+
+func rotate_bone(bone_name:String,x_degrees:float = 0.0,y_degrees:float = 0.0,z_degrees:float = 0.0) -> void:
+	if skeleton == null:
+		return
+	var bone_idx = skeleton.find_bone(bone_name)
+	if bone_idx == -1:
+		return
+	cache_bone_rest(bone_name)
+	var rest = bone_default_rest[bone_name]
+	var rot_basis = Basis()
+	rot_basis = rot_basis.rotated(Vector3.RIGHT, deg2rad(x_degrees))
+	rot_basis = rot_basis.rotated(Vector3.UP, deg2rad(y_degrees))
+	rot_basis = rot_basis.rotated(Vector3.FORWARD, deg2rad(z_degrees))
+	var new_transform = Transform(rest.basis * rot_basis,rest.origin)
+	skeleton.set_bone_rest(bone_idx, new_transform)
+
+
+
+func reset_bone_transform(bone_name:String) -> void:
+	if skeleton == null:
+		return
+
+	var bone_idx = skeleton.find_bone(bone_name)
+	if bone_idx == -1:
+		return
+
+	if !bone_default_rest.has(bone_name):
+		return
+
+	skeleton.set_bone_rest(bone_idx, bone_default_rest[bone_name])
+
+
+
+
+func move_bone(bone_name:String,x_offset:float = 0.0,y_offset:float = 0.0,z_offset:float = 0.0) -> void:
+	if skeleton == null:
+		return
+	var bone_idx = skeleton.find_bone(bone_name)
+	if bone_idx == -1:
+		return
+	cache_bone_rest(bone_name)
+	var rest = bone_default_rest[bone_name]
+	var new_transform = Transform(rest.basis,rest.origin + Vector3(x_offset, y_offset, z_offset))
+	skeleton.set_bone_rest(bone_idx, new_transform)
+
+func reset_bone_position(bone_name:String) -> void:
+	if skeleton == null:
+		return
+	var bone_idx = skeleton.find_bone(bone_name)
+	if bone_idx == -1:
+		return
+	if !bone_default_rest.has(bone_name):
+		return
+	skeleton.set_bone_rest(bone_idx, bone_default_rest[bone_name])
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
 func _find_weapon_from_icon(icon:Texture) -> Dictionary:
 	for weapon in Items.weapons.values():
 		if weapon["icon"] == icon:
@@ -407,8 +540,6 @@ func _spawn_weapon(weapon_data:Dictionary, parent:Node) -> Node:
 	return weapon_node
 
 
-
-
 func saveData() -> void:
 	var dir = Directory.new()
 
@@ -420,11 +551,14 @@ func saveData() -> void:
 
 	var data = {
 		"visible": visible,
+
 		"Torso": _get_texture_path(slot_torso),
 		"Hands": _get_texture_path(slot_hands),
 		"Feet": _get_texture_path(slot_feet),
+
 		"MainHand": _get_texture_path(slot_mainhand),
-		"OffHand": _get_texture_path(slot_offhand)
+		"OffHand": _get_texture_path(slot_offhand),
+		"Shield": _get_texture_path(slot_shield)
 	}
 
 	if file.open(path, File.WRITE) == OK:
@@ -443,6 +577,7 @@ func loadData() -> void:
 
 		slot_mainhand.texture = null
 		slot_offhand.texture = null
+		slot_shield.texture = null
 
 		updateEquipment()
 		saveData()
@@ -455,6 +590,7 @@ func loadData() -> void:
 
 		slot_mainhand.texture = null
 		slot_offhand.texture = null
+		slot_shield.texture = null
 
 		updateEquipment()
 		saveData()
@@ -470,6 +606,7 @@ func loadData() -> void:
 
 		slot_mainhand.texture = null
 		slot_offhand.texture = null
+		slot_shield.texture = null
 
 		updateEquipment()
 		saveData()
@@ -480,12 +617,14 @@ func loadData() -> void:
 	_load_texture(slot_torso, data.get("Torso", ""))
 	_load_texture(slot_hands, data.get("Hands", ""))
 	_load_texture(slot_feet, data.get("Feet", ""))
+
 	_load_texture(slot_mainhand, data.get("MainHand", ""))
 	_load_texture(slot_offhand, data.get("OffHand", ""))
+	_load_texture(slot_shield, data.get("Shield", ""))
 
 	updateEquipment()
 	get_equipment_stats()
-
+	
 
 func _get_texture_path(slot: TextureRect) -> String:
 	if !slot:

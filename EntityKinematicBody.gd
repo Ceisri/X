@@ -44,8 +44,14 @@ class AggroTarget:
 var melee_step = 1
 var can_move:bool = true
 var is_in_combat:bool = false
-var current_skill:String = ""
-var anim_locks = {
+var current_skill:String = "combo attack"
+var anim_locks = { 
+	"combo attack":false,
+	"downed":true,
+	"get up":false,
+	"downed die":false,
+	"flinch":false,
+	"knocked back":false,
 	"atk1":false,
 	"atk2":false,
 	"atk3":false,

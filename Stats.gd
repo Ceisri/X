@@ -109,6 +109,8 @@ var Names = [
 
 
 var base_max_health = 100
+var base_max_energy = 100
+var base_max_arcane = 100
 var base_walk_speed = 3
 var base_run_speed = 7
 
@@ -274,14 +276,23 @@ func decreaseAttribute(attribute_name:String) -> void:
 	updateAttributes()
 
 
+func regenerations()->void:
+	if parent.is_in_group("Entity"):
+		if parent.is_in_combat == false:
+			if health >0:
+				health = regenerate(derived_stats["health_regeneration"],health,max_health)
+				energy = regenerate(derived_stats["energy_regeneration"],energy,max_energy)
+
 func _physics_process(delta): 
 	updateAttributes()
+	
 	rebuildOnHitEffects()
+	updateBuffDebuffs(delta)
 	updateStatuses(delta)
-	if not parent.is_in_combat:
-			health = regenerate(derived_stats["health_regeneration"],health,max_health)
-			energy = regenerate(derived_stats["energy_regeneration"],energy,max_energy)
+	regenerations()
+
 	if Input.is_action_just_pressed("debug_attributes"):
+		energy = 0 
 		var uistats = $"../UI/Equipment/UIStats"
 		if is_instance_valid(uistats):
 			uistats.updateUI()
@@ -301,9 +312,8 @@ func _physics_process(delta):
 		available_attribute_points += 10
 		updateAttributes()
 		energy += max_energy/2
-		acid_multiplier+=100.0
-		bleed_defence += 3
-		debugDamage()
+		if Engine.get_physics_frames() % 120 == 0:
+			debugDamage()
 
 const ATTRIBUTE_STEP := 0.05
 const MIN_ATTRIBUTE := 0.25
@@ -401,239 +411,273 @@ onready var mob_status_grid:GridContainer=$"../UI/CrossairInspect/MobStatusGrid"
 onready var player_status_grid:GridContainer=$"../UI/Menu/CharacterBar/PlayerStatusGrid"
 onready var player_example_icon:TextureRect = $"../UI/Menu/CharacterBar/PlayerStatusGrid/Icon1"
 onready var mob_example_icon:TextureRect = $"../UI/CrossairInspect/GridContainer/Icon1"
-
-
-func updateStatusGrid(grid:GridContainer, source)->void:
-	if grid == null or source == null:
-		return
-
-	var template:TextureRect = grid.get_node("Icon1")
-
-	for child in grid.get_children():
-		if child != template:
-			child.queue_free()
-
-	template.visible = false
-
-	for status_name in source.statuses.keys():
-
-		if !Skills.status_icons.has(status_name):
-			continue
-
-		var s = source.statuses[status_name]
-
-		if typeof(s) == TYPE_ARRAY:
-			for entry in s:
-				var icon = template.duplicate()
-				icon.visible = true
-				icon.name = "Icon_" + status_name
-				icon.texture = Skills.status_icons[status_name]
-
-				var label = icon.get_node("Label")
-				if label:
-					label.text = str(int(ceil(entry["duration"])))
-
-				var stack_label = icon.get_node("Stack")
-				if stack_label:
-					var stacks = int(entry.get("stacks",1))
-					stack_label.text = "" if stacks <= 1 else str(stacks)
-
-				grid.add_child(icon)
-		else:
-			var icon = template.duplicate()
-			icon.visible = true
-			icon.name = "Icon_" + status_name
-			icon.texture = Skills.status_icons[status_name]
-
-			var label = icon.get_node("Label")
-			if label:
-				label.text = str(int(ceil(s["duration"])))
-
-			var stack_label = icon.get_node("Stack")
-			if stack_label:
-				var stacks = int(s.get("stacks",1))
-				stack_label.text = "" if stacks <= 1 else str(stacks)
-
-			grid.add_child(icon)
-
-
-			
 func _process(delta):
 	if Input.is_action_just_pressed("7"):
 		if parent.is_in_group("Player"):
-			parent.current_skill = "base attack"
+			parent.current_skill = "combo attack"
 			for status_name in Skills.status_effects[parent.current_skill]:
 					parent.get_node("Stats").applyStatus(status_name,parent,parent.current_skill)
-	
-	
-	if is_instance_valid($"../StatusesLabel"):
-		var label =  $"../StatusesLabel"
 
-		if statuses.empty():
-			label.text = ""
-			return
+func updateStatusGrid(grid:GridContainer,source)->void:
+	if grid==null or source==null:return
 
-		var text := ""
+	var template:TextureRect=grid.get_node("Icon1")
 
-		for status_name in statuses.keys():
-			var s = statuses[status_name]
+	for child in grid.get_children():
+		if child!=template:child.queue_free()
 
-			if typeof(s) == TYPE_ARRAY:
-				for entry in s:
-					if typeof(entry) != TYPE_DICTIONARY:
-						continue
-					text += status_name + " (" + str(ceil(entry.get("duration", 0.0))) + ")\n"
+	template.visible=false
+
+	var status_value
+	var icon_instance:TextureRect
+	var duration_label
+	var stack_label
+	var stack_value:int
+
+	for status_name in source.statuses.keys():
+
+		status_value=source.statuses[status_name]
+
+		if typeof(status_value)==TYPE_ARRAY:
+			for status_entry in status_value:
+				if typeof(status_entry)!=TYPE_DICTIONARY:continue
+				if !Skills.status_icons.has(status_name):continue
+
+				icon_instance=template.duplicate()
+				icon_instance.visible=true
+				icon_instance.name="Icon_"+status_name
+				icon_instance.texture=Skills.status_icons[status_name]
+
+				duration_label=icon_instance.get_node("Label")
+				if duration_label:duration_label.text=str(int(ceil(status_entry.get("duration",0.0))))
+
+				stack_label=icon_instance.get_node("Stack")
+				if stack_label:
+					stack_value=0
+					for entry in status_value:
+						if typeof(entry)!=TYPE_DICTIONARY:continue
+						stack_value+=int(entry.get("stacks",1))
+					stack_label.text="" if stack_value<=1 else str(stack_value)
+
+				grid.add_child(icon_instance)
+
+		elif typeof(status_value)==TYPE_DICTIONARY:
+			if !Skills.status_icons.has(status_name):continue
+
+			icon_instance=template.duplicate()
+			icon_instance.visible=true
+			icon_instance.name="Icon_"+status_name
+			icon_instance.texture=Skills.status_icons[status_name]
+
+			duration_label=icon_instance.get_node("Label")
+			if duration_label:duration_label.text=str(int(ceil(status_value.get("duration",0.0))))
+
+			stack_label=icon_instance.get_node("Stack")
+			if stack_label:
+				stack_value=int(status_value.get("stacks",1))
+				stack_label.text="" if stack_value<=1 else str(stack_value)
+
+			grid.add_child(icon_instance)
+
+	for icon_key in source.debuff_buffs_active.keys():
+
+		status_value=source.debuff_buffs_active[icon_key]
+
+		if !Skills.status_icons.has(icon_key):continue
+
+		icon_instance=template.duplicate()
+		icon_instance.visible=true
+		icon_instance.name="Icon_"+icon_key
+		icon_instance.texture=Skills.status_icons[icon_key]
+
+		duration_label=icon_instance.get_node("Label")
+		if duration_label:duration_label.text=str(int(ceil(status_value.get("duration",0.0))))
+
+		stack_label=icon_instance.get_node("Stack")
+		if stack_label:
+			if status_value.has("stackable") and status_value["stackable"]==false:
+				stack_label.text=""
 			else:
-				text += status_name + " (" + str(ceil(s.get("duration", 0.0))) + ")\n"
-		label.text = text.strip_edges()
-var statuses = {}
-func applyStatus(status_name:String, applier:Node = null, current_skill:String = "")->void:
-	if !Skills.status_effects.has(current_skill):
+				stack_value=int(status_value.get("stacks",1))
+				stack_label.text="" if stack_value<=1 else str(stack_value)
+
+		grid.add_child(icon_instance)
+
+var statuses={}
+var status_attribute_modifiers={}
+var debuff_buffs_active={}
+
+var attributes_buff={
+	"strength":0,"power":0,"agility":0,"dexterity":0,"vitality":0,
+	"toughness":0,"instinct":0,"perception":0,"intelligence":0,
+	"wisdom":0,"haste":0,"charisma":0,"authority":0
+}
+
+
+func applyBuffDebuff(buff_name:String)->void:
+	if !Skills.debuffs_buffs.has(buff_name):return
+	if debuff_buffs_active.has(buff_name):return
+
+	var buff_data=Skills.debuffs_buffs[buff_name]
+	var applied_attributes={}
+
+	for attribute_name in attributes_buff.keys():
+		var value=float(buff_data.get(attribute_name,0.0))
+		applied_attributes[attribute_name]=value
+		attributes_buff[attribute_name]+=value
+
+	debuff_buffs_active[buff_name]={
+		"duration":float(buff_data.get("duration",0.0)),
+		"attributes":applied_attributes
+	}
+func updateBuffDebuffs(delta:float)->void:
+	for k in debuff_buffs_active.keys():
+		debuff_buffs_active[k]["duration"]-=delta
+
+		if debuff_buffs_active[k]["duration"]<=0.0:
+			debuff_buffs_active.erase(k)
+
+	if debuff_buffs_active.size()==0:
+		for k in attributes_buff:
+			attributes_buff[k]=0.0
 		return
-	if !Skills.status_effects[current_skill].has(status_name):
-		return
 
-	var data = Skills.status_effects[current_skill][status_name]
+	for k in attributes_buff:
+		attributes_buff[k]=0.0
 
-	var stackable:bool = data.get("can_stack", false)
-	var final_duration:float = data.get("duration", 0.0)
-	var tick_damage:float = data.get("base_damage", 0.0)
-	var affects:Array = data.get("affects", [])
-	var tick_interval:float = data.get("tick_timer", 1.0)
+	for k in debuff_buffs_active:
+		var b=debuff_buffs_active[k]["attributes"]
+		for a in attributes_buff:
+			attributes_buff[a]+=float(b.get(a,0.0))
 
-	var applier_name:String = ""
-	if applier != null and is_instance_valid(applier):
-		applier_name = applier.name
+
+func getTotalAttribute(name:String)->float:
+	return attributes.get(name,1.0)+equipment_attributes.get(name,0.0)+attributes_buff.get(name,0.0)
+
+
+
+
+func applyStatus(status_name:String,applier:Node=null,current_skill:String="")->void:
+	if !Skills.status_effects.has(current_skill):return
+	if !Skills.status_effects[current_skill].has(status_name):return
+	var data=Skills.status_effects[current_skill][status_name]
+	var stackable=bool(data.get("can_stack",false))
+	var duration=float(data.get("duration",0.0))
+	var tick=float(data.get("tick_timer",1.0))
+	var dmg=float(data.get("base_damage",0.0))
+	var affects=data.get("affects",[])
+	var applier_name=applier.name if applier and is_instance_valid(applier) else ""
 
 	if !stackable:
 		if statuses.has(status_name):
-			var s = statuses[status_name]
-			if typeof(s) == TYPE_DICTIONARY:
-				s["duration"] = max(s.get("duration", 0.0), final_duration)
-				return
-			else:
-				statuses.erase(status_name)
-
-		statuses[status_name] = {
-			"duration": final_duration,
-			"tick_timer": tick_interval,
-			"tick_interval": tick_interval,
-			"skill": current_skill,
-			"applier_name": applier_name,
-			"tick_damage": tick_damage,
-			"power": data.get("power", 0.0),
-			"affects": affects,
-			"stacks": 1
+			if typeof(statuses[status_name])==TYPE_DICTIONARY:
+				statuses[status_name]["duration"]=max(float(statuses[status_name].get("duration",0.0)),duration)
+			return
+		statuses[status_name]={
+			"duration":duration,"tick_timer":tick,"tick_interval":tick,
+			"skill":current_skill,"applier_name":applier_name,
+			"tick_damage":dmg,"power":data.get("power",0.0),
+			"power2":data.get("power2",0.0),"affects":affects,"stacks":1
 		}
 		return
 
-	if !statuses.has(status_name):
-		statuses[status_name] = []
-	elif typeof(statuses[status_name]) != TYPE_ARRAY:
-		var old = statuses[status_name]
-		statuses[status_name] = []
-		if typeof(old) == TYPE_DICTIONARY:
-			statuses[status_name].append(old)
+	if !statuses.has(status_name):statuses[status_name]=[]
+	elif typeof(statuses[status_name])!=TYPE_ARRAY:
+		var o=statuses[status_name]
+		statuses[status_name]=[]
+		if typeof(o)==TYPE_DICTIONARY:statuses[status_name].append(o)
 
-	var list = statuses[status_name]
-	var merged := false
-
+	var list=statuses[status_name]
 	for i in range(list.size()):
-		var entry = list[i]
-		if typeof(entry) != TYPE_DICTIONARY:
-			continue
+		var e=list[i]
+		if typeof(e)!=TYPE_DICTIONARY:continue
+		if e.get("applier_name","")==applier_name and e.get("skill","")==current_skill:
+			var st=int(e.get("stacks",1))+1
+			if data.has("max_stacks"):st=min(st,int(data["max_stacks"]))
+			e["stacks"]=st
+			e["duration"]=max(float(e.get("duration",0.0)),duration)
+			e["tick_damage"]=dmg*st
+			e["power"]=float(data.get("power",0.0))*st
+			e["power2"]=float(data.get("power2",0.0))*st
+			e["affects"]=affects
+			return
 
-		if entry.get("applier_name", "") == applier_name and entry.get("skill","") == current_skill:
-			var new_stacks = int(entry.get("stacks", 1)) + 1
-
-			if data.has("max_stacks"):
-				new_stacks = min(new_stacks, int(data["max_stacks"]))
-
-			entry["stacks"] = new_stacks
-			entry["duration"] = max(entry.get("duration", 0.0), final_duration)
-			entry["tick_damage"] = tick_damage * entry["stacks"]
-			entry["power"] = data.get("power", 0.0) * entry["stacks"]
-			entry["affects"] = affects
-
-			merged = true
-			break
-
-	if !merged:
-		list.append({
-			"duration": final_duration,
-			"tick_timer": tick_interval,
-			"tick_interval": tick_interval,
-			"skill": current_skill,
-			"applier_name": applier_name,
-			"tick_damage": tick_damage,
-			"power": data.get("power", 0.0),
-			"affects": affects,
-			"stacks": 1
-		})
-
-
+	list.append({
+		"duration":duration,"tick_timer":tick,"tick_interval":tick,
+		"skill":current_skill,"applier_name":applier_name,
+		"tick_damage":dmg,"power":data.get("power",0.0),
+		"power2":data.get("power2",0.0),"affects":affects,"stacks":1
+	})
 func updateStatuses(delta:float)->void:
-	var statuses_to_remove=[]
+	var to_remove=[]
 
 	for status_name in statuses.keys():
-		var status_data=statuses[status_name]
+		var data=statuses[status_name]
 
-		if typeof(status_data)==TYPE_ARRAY:
-			for i in range(status_data.size()-1,-1,-1):
-				var entry=status_data[i]
-				if typeof(entry)!=TYPE_DICTIONARY:
+		if typeof(data)==TYPE_ARRAY:
+			for i in range(data.size()-1,-1,-1):
+				var e=data[i]
+				if typeof(e)!=TYPE_DICTIONARY:
 					continue
 
-				entry["duration"]-=delta
-				entry["tick_timer"]-=delta
+				e["duration"]=float(e.get("duration",0.0))-delta
+				e["tick_timer"]=float(e.get("tick_timer",1.0))-delta
 
-				var applier=entry.get("applier",null)
-				var power=float(entry.get("power",0.0))
-				var tick_interval=float(entry.get("tick_interval",1.0))
+				var applier=e.get("applier",null)
+				var power=float(e.get("power",0.0))
+				var tick=float(e.get("tick_interval",1.0))
 
-				if status_name=="bleed" and entry["tick_timer"]<=0.0:
-					getHit(applier if applier!=null else self,{damage_type.bleed:entry.get("tick_damage",power)},false,0.0,false)
-					entry["tick_timer"]=tick_interval
+				if status_name=="bleed" and e["tick_timer"]<=0.0:
+					getHit(applier if applier!=null else self,{damage_type.bleed:e.get("tick_damage",power)},false,0.0,false)
+					e["tick_timer"]=tick
 
-				elif status_name.begins_with("heal") and entry["tick_timer"]<=0.0:
+				elif status_name.begins_with("heal") and e["tick_timer"]<=0.0:
 					getHeal(applier if applier!=null else self,power)
-					entry["tick_timer"]=tick_interval
+					e["tick_timer"]=tick
 
-				if entry["duration"]<=0.0:
-					status_data.remove(i)
+				if e["duration"]<=0.0:
+					data.remove(i)
 
-			if status_data.size()==0:
-				statuses_to_remove.append(status_name)
+			if data.size()==0:
+				to_remove.append(status_name)
 
-		else:
-			var entry=status_data
+		elif typeof(data)==TYPE_DICTIONARY:
+			var e=data
 
-			if typeof(entry)!=TYPE_DICTIONARY:
-				statuses_to_remove.append(status_name)
-				continue
+			var d=float(e.get("duration",0.0))-delta
+			var t=float(e.get("tick_timer",1.0))-delta
 
-			entry["duration"]-=delta
-			entry["tick_timer"]-=delta
+			e["duration"]=d
+			e["tick_timer"]=t
 
-			var applier=entry.get("applier",null)
-			var power=float(entry.get("power",0.0))
-			var tick_interval=float(entry.get("tick_interval",1.0))
+			var applier=e.get("applier",null)
+			var power=float(e.get("power",0.0))
+			var tick=float(e.get("tick_interval",1.0))
 
-			if status_name=="bleed" and entry["tick_timer"]<=0.0:
-				getHit(applier if applier!=null else self,{damage_type.bleed:entry.get("tick_damage",power)},false,0.0,false)
-				entry["tick_timer"]=tick_interval
+			if status_name=="bleed" and t<=0.0:
+				getHit(applier if applier!=null else self,{damage_type.bleed:e.get("tick_damage",power)},false,0.0,false)
+				e["tick_timer"]=tick
 
-			elif status_name.begins_with("heal") and entry["tick_timer"]<=0.0:
+			elif status_name.begins_with("heal") and t<=0.0:
 				getHeal(applier if applier!=null else self,power)
-				entry["tick_timer"]=tick_interval
+				e["tick_timer"]=tick
 
-			if entry["duration"]<=0.0:
-				statuses_to_remove.append(status_name)
+			if d<=0.0:
+				to_remove.append(status_name)
 
-	for status_name in statuses_to_remove:
-		removeStatus(status_name)
+	for k in status_attribute_modifiers.keys():
+		status_attribute_modifiers[k]["duration"] -= delta
+		if status_attribute_modifiers[k]["duration"] <= 0.0:
+			status_attribute_modifiers.erase(k)
+
+	for s in to_remove:
+		removeStatus(s)
 
 	updateStatusGrid(player_status_grid,self)
+
+
+
+
 
 func removeStatus(status_name:String)->void:
 	if !statuses.has(status_name):
@@ -650,39 +694,12 @@ func removeStatus(status_name:String)->void:
 	statuses.erase(status_name)
 	updateStatusGrid(player_status_grid, self)
 	
-	
-	
-func getTotalAttribute(name:String)->float:
-	var base = attributes.get(name,1.0) + equipment_attributes.get(name,0.0)
-
-	if name == "agility" and statuses.has("slow"):
-		var slow_total := 0.0
-
-		var s = statuses["slow"]
-		if typeof(s) == TYPE_ARRAY:
-			for e in s:
-				slow_total += float(e.get("power", 0.0))
-		else:
-			slow_total = float(s.get("power", 0.0))
-
-		var mult = 1.0 - slow_total
-		if mult < 0.01:
-			mult = 0.01
-
-		return base * mult
-
-	return base
-
-
-
-
-
-
 
 
 func updateAttributes():
-	max_arcane = 100 + getTotalAttribute("wisdom") * 10
+	max_arcane =  base_max_arcane * (getTotalAttribute("wisdom") * 10)
 	max_health = base_max_health +getTotalAttribute("vitality") * 20
+	max_energy = base_max_energy * (getTotalAttribute("vitality") + (getTotalAttribute("agility") *2)) * 5
 	walk_speed = base_walk_speed + getTotalAttribute("agility") * 0.2
 	run_speed = base_run_speed + getTotalAttribute("agility") * 0.4
 
@@ -740,6 +757,27 @@ func updateAttributes():
 	derived_stats["run_speed"] *= slow
 	derived_stats["swim_speed"] *= slow
 	derived_stats["climb_speed"] *= slow
+	
+	var berserk_speed_mult := 1.0
+
+	if statuses.has("berserk_buff"):
+		var s = statuses["berserk_buff"]
+		var power :float = 0.0
+
+		if typeof(s) == TYPE_ARRAY:
+			for e in s:
+				power += float(e.get("power", 0.0))
+		else:
+			power = float(s.get("power", 0.0))
+
+		berserk_speed_mult = max(0.01, 1.0 - power)
+	walk_speed *= berserk_speed_mult
+	run_speed *= berserk_speed_mult
+	
+	derived_stats["run_speed"] *= berserk_speed_mult
+	derived_stats["swim_speed"] *= berserk_speed_mult
+	derived_stats["climb_speed"] *= berserk_speed_mult
+	derived_stats["attack_speed"] *= berserk_speed_mult
 
 
 
@@ -857,6 +895,30 @@ func updateCombatAttributes():
 	arcane_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.arcane]
 	radiant_multiplier=1.0+power_bonus+equipment_damage_bonus[damage_type.radiant]
 
+	var berserk_damage_bonus :float = 0.0
+	
+	if statuses.has("berserk_buff"):
+		var s = statuses["berserk_buff"]
+
+		if typeof(s) == TYPE_ARRAY:
+			for e in s:
+				berserk_damage_bonus += float(e.get("power2", 0.0))
+		else:
+			berserk_damage_bonus = float(s.get("power2", 0.0))
+	var berserk_mult := 1.0 + berserk_damage_bonus
+	slash_multiplier *= berserk_mult
+	blunt_multiplier *= berserk_mult
+	pierce_multiplier *= berserk_mult
+	bleed_multiplier *= berserk_mult
+
+	sonic_multiplier *= berserk_mult
+	heat_multiplier *= berserk_mult
+	cold_multiplier *= berserk_mult
+	jolt_multiplier *= berserk_mult
+	toxic_multiplier *= berserk_mult
+	acid_multiplier *= berserk_mult
+	arcane_multiplier *= berserk_mult
+	radiant_multiplier *= berserk_mult
 
 
 	
@@ -880,48 +942,46 @@ func getBleedData(skill:String)->Dictionary:
 
 
 
-
-onready var skill_tree_holder = $"../UI/SkillTreeRoot/SkillsTreeHolder/Control"
-
 func getSkillLevel(skill_name:String) -> int:
 
-	if skill_tree_holder == null:
+	var root = get_node_or_null("../UI/SkillTreeRoot")
+	if root == null:
 		return 0
 
-	for child in skill_tree_holder.get_children():
+	var holders = []
+	for i in range(1, 10):
+		var holder = root.get_node_or_null("SkillsTreeHolder" + ("" if i == 1 else str(i)))
+		if holder == null:
+			break
+		holders.append(holder)
 
-		if child == null:
+	var skill_res = Skills.skills.get(skill_name, null)
+	if skill_res == null:
+		return 0
+
+	for holder in holders:
+		if holder == null:
 			continue
 
-		if !child.name.begins_with("SkillButton"):
-			continue
+		for child in holder.get_children():
 
-		var slot = child.get_node_or_null("Slot")
-
-		if slot == null or slot.texture == null:
-			continue
-
-		var texture_path = slot.texture.resource_path
-
-		for skill in Skills.skills:
-
-			if Skills.skills[skill] == null:
+			if child == null:
 				continue
 
-			if Skills.skills[skill].resource_path != texture_path:
+			if !child.name.begins_with("SkillButton"):
 				continue
 
-			if skill != skill_name:
-				break
+			var slot = child.get_node_or_null("Slot")
+			if slot == null or slot.texture == null:
+				continue
+
+			if skill_res.resource_path != slot.texture.resource_path:
+				continue
 
 			if "skill_level" in child:
 				return int(child.skill_level)
 
-			return 0
-
 	return 0
-
-
 func getSkillLevelMultiplier(skill_name:String) -> float:
 	return Skills.getDamageMultiplier(
 		skill_name,
@@ -937,47 +997,75 @@ func rebuildOnHitEffects()->void:
 
 	active_on_hit_effects.clear()
 
-	active_on_hit_effects["base attack"] = {
+	active_on_hit_effects["combo attack"] = {
 		"energy_restore":7.0
 	}
 
-	if getSkillLevel("base attack") >= 5:
+	if getSkillLevel("combo attack") >= 5:
 
-		active_on_hit_effects["base attack"]["reduce_cooldowns"] = {
+		active_on_hit_effects["combo attack"]["reduce_cooldowns"] = {
 			"cleave":0.25,
 			"section":0.25,
 			"perforation trifecta":1.25
 		}
 
-	if getSkillLevel("base attack") >= 10:
-		active_on_hit_effects["base attack"]["lifesteal_flat"] = 300
+	if getSkillLevel("combo attack") >= 10:
+		active_on_hit_effects["combo attack"]["lifesteal_flat"] = 300
 
 	# Glyph system example for later:
 	#
 	# if hasGlyph("bloodthirst"):
-	# 	active_on_hit_effects["base attack"]["lifesteal_percent"] = 0.05
+	# 	active_on_hit_effects["combo attack"]["lifesteal_percent"] = 0.05
 	#
 	# if hasGlyph("combat_focus"):
 	#
-	# 	if !active_on_hit_effects["base attack"].has("reduce_cooldowns"):
-	# 		active_on_hit_effects["base attack"]["reduce_cooldowns"] = {}
+	# 	if !active_on_hit_effects["combo attack"].has("reduce_cooldowns"):
+	# 		active_on_hit_effects["combo attack"]["reduce_cooldowns"] = {}
 	#
-	# 	active_on_hit_effects["base attack"]["reduce_cooldowns"]["overhead strike"] = 0.25
+	# 	active_on_hit_effects["combo attack"]["reduce_cooldowns"]["overhead strike"] = 0.25
 
-	if !active_on_hit_effects["base attack"].has("lifesteal_flat"):
-		active_on_hit_effects["base attack"]["lifesteal_flat"] = 0.0
+	if !active_on_hit_effects["combo attack"].has("lifesteal_flat"):
+		active_on_hit_effects["combo attack"]["lifesteal_flat"] = 0.0
 
-	if !active_on_hit_effects["base attack"].has("lifesteal_percent"):
-		active_on_hit_effects["base attack"]["lifesteal_percent"] = 0.0
-		
-		
+	if !active_on_hit_effects["combo attack"].has("lifesteal_percent"):
+		active_on_hit_effects["combo attack"]["lifesteal_percent"] = 0.0
+
+
+var areas_to_use = {
+	"raze": NodePath("../Cleave"),
+	"sledge": NodePath("../Cleave"),
+	"shoulder bash": NodePath("../Bash"),
+	"sadistic blow": NodePath("../Bash")
+}
+
+
+
+var charged_attack_stacks = {
+	"obliteration": {
+		"stacks": 0,
+		"multiplier": 1.5
+	}
+}
 func dealDamage():
-	var area:Area = null
+	if parent.is_in_group("Entity"):
+		parent.is_in_combat = true
+
+	var area: Area = null
 
 	if parent.is_in_group("Player") or parent.is_in_group("player"):
-		area = $"../character/root/Skeleton/WeaponR/Short"
+		var skill = parent.current_skill.to_lower()
+
+		if areas_to_use.has(skill):
+			area = get_node(areas_to_use[skill])
+		else:
+			if parent.WeaponMode.SWORD:
+				area = $"../character/root/Skeleton/WeaponR/Short"
+			elif parent.WeaponMode.TWO_HANDED:
+				area = $"../character/root/Skeleton/WeaponR/Long"
+	elif parent.is_in_group("Detached"):
+		area = $"../Area"
 	else:
-		area = $"../AreaDamage"
+		area =  $"../AreaDamage"
 
 	if area == null:
 		return
@@ -987,47 +1075,38 @@ func dealDamage():
 	var skill_name:String = ""
 	var skill_level_mult:float = 1.0
 
-	if parent.is_in_group("Player") or parent.is_in_group("player"):
-		skill_name = parent.current_skill
-		skill_level_mult = getSkillLevelMultiplier(skill_name)
+	skill_name = parent.current_skill
+	skill_level_mult = getSkillLevelMultiplier(skill_name)
 
-		var skill_damages = Skills.getDamages(skill_name)
+	var skill_damages = Skills.getDamages(skill_name)
+#CHARGED ATTACKS____________________________________________________________________________________
+	if charged_attack_stacks.has(skill_name):
+		var data = charged_attack_stacks[skill_name]
+		if data.stacks > 0:
+			for dmg_type in skill_damages:
+				skill_damages[dmg_type] += skill_damages[dmg_type] * (data.stacks * data.multiplier)
+#___________________________________________________________________________________________________
+	
+	for dmg_type in skill_damages:
 
-		for dmg_type in skill_damages:
+		var mult = 1.0
 
-			var mult = 1.0
+		match dmg_type:
+			DamageTypes.Type.slash: mult = slash_multiplier
+			DamageTypes.Type.blunt: mult = blunt_multiplier
+			DamageTypes.Type.pierce: mult = pierce_multiplier
+			DamageTypes.Type.sonic: mult = sonic_multiplier
+			DamageTypes.Type.heat: mult = heat_multiplier
+			DamageTypes.Type.cold: mult = cold_multiplier
+			DamageTypes.Type.jolt: mult = jolt_multiplier
+			DamageTypes.Type.toxic: mult = toxic_multiplier
+			DamageTypes.Type.acid: mult = acid_multiplier
+			DamageTypes.Type.arcane: mult = arcane_multiplier
+			DamageTypes.Type.bleed: mult = bleed_multiplier
+			DamageTypes.Type.radiant: mult = radiant_multiplier
 
-			match dmg_type:
-				DamageTypes.Type.slash: mult = slash_multiplier
-				DamageTypes.Type.blunt: mult = blunt_multiplier
-				DamageTypes.Type.pierce: mult = pierce_multiplier
-				DamageTypes.Type.sonic: mult = sonic_multiplier
-				DamageTypes.Type.heat: mult = heat_multiplier
-				DamageTypes.Type.cold: mult = cold_multiplier
-				DamageTypes.Type.jolt: mult = jolt_multiplier
-				DamageTypes.Type.toxic: mult = toxic_multiplier
-				DamageTypes.Type.acid: mult = acid_multiplier
-				DamageTypes.Type.arcane: mult = arcane_multiplier
-				DamageTypes.Type.bleed: mult = bleed_multiplier
-				DamageTypes.Type.radiant: mult = radiant_multiplier
+		damages[dmg_type] = skill_damages[dmg_type] * mult * skill_level_mult
 
-			damages[dmg_type] = skill_damages[dmg_type] * mult * skill_level_mult
-
-	else:
-
-		if parent.has_node("Combat"):
-			skill_name = parent.get_node("Combat").current_cast_skill
-			var mob_damages = MobSkills.getDamages(skill_name)
-
-			executeSpell()
-
-			for damage_name in mob_damages:
-				if damage_type.has(damage_name):
-					var dmg_type = damage_type[damage_name]
-					damages[dmg_type] = mob_damages[damage_name]
-
-	if damages.size() == 0:
-		return
 
 	var my_stats = parent.get_node_or_null("Stats")
 	var my_species = my_stats.species if my_stats != null else ""
@@ -1045,7 +1124,6 @@ func dealDamage():
 	var is_penetrating_hit = my_stats != null and randf() <= my_stats.derived_stats["penetrating_hit_chance"]
 
 	for body in area.get_overlapping_bodies():
-
 		if body == parent:
 			continue
 
@@ -1059,16 +1137,28 @@ func dealDamage():
 
 		if body.has_node("Stats"):
 			other_stats.getHit(parent, damages, is_penetrating_hit, 0.0, is_crit)
-			for status_name in Skills.status_effects[skill_name]:
-				other_stats.applyStatus(status_name,parent,skill_name)
+			
+			if Skills != null and Skills.status_effects is Dictionary and Skills.status_effects.has(skill_name):
+				if Skills.status_effects[skill_name] is Dictionary:
+					for status_name in Skills.status_effects[skill_name]:
+						other_stats.applyStatus(status_name, parent, skill_name)
+		
 			var skillbar = $"../UI/Skillbar"
-			if parent.is_in_group("Player") or parent.is_in_group("player"):
-				Skills.applyOnHitEffects(skill_name,active_on_hit_effects,skillbar.active_cooldowns,my_stats,total_damage)
+			if Skills != null and Skills.has_method("applyOnHitEffects"):
+				if parent.is_in_group("Entity"):
+					if parent.is_in_group("Player"):
+						Skills.applyOnHitEffects(skill_name, active_on_hit_effects, skillbar.active_cooldowns, my_stats, total_damage, body)
+					else:
+						pass #replace when revamping Mobskills.gd to fuse with Skills.gd
+						
+						
+	for attack_name in charged_attack_stacks:charged_attack_stacks[attack_name]["stacks"] = 0
+
 
 
 
 func getHit(attacker:Node,damages:Dictionary,is_penetrating_hit:bool,extra_threat:float,is_crit:bool=false)->void:
-	parent.is_in_combat == true
+	#parent.is_in_combat == true
 	var total_damage:=0.0
 	var final_damages={}
 
@@ -1097,11 +1187,16 @@ func getHit(attacker:Node,damages:Dictionary,is_penetrating_hit:bool,extra_threa
 
 		
 
-		var final_damage=damage*(1.0-mitigation)
+		var final_damage = damage * (1.0 - mitigation)
 
-		final_damages[dmg_type]=final_damage
-		total_damage+=final_damage
+		if statuses.has("berserk_buff"):
+			final_damage *= 1.8
 
+		final_damages[dmg_type] = final_damage
+		total_damage += final_damage
+				
+		
+		
 	if !(parent.is_in_group("Player") or parent.is_in_group("player")):
 		if attacker != null:
 			if attacker.is_in_group("Entity"):
@@ -1110,37 +1205,33 @@ func getHit(attacker:Node,damages:Dictionary,is_penetrating_hit:bool,extra_threa
 
 	health-=total_damage
 	
+	# Berserk reflect
+	if statuses.has("berserk_buff") \
+	and health > 0.0 \
+	and attacker != null \
+	and is_instance_valid(attacker) \
+	and attacker.has_node("Stats"):
+
+		var attacker_stats = attacker.get_node("Stats")
+
+		# reflect 100% of damage actually taken
+		attacker_stats.health -= total_damage
+		if attacker_stats.health < 0.0:
+			attacker_stats.health = 0.0
+	
+	
 	if attacker != null and attacker.is_in_group("Entity"):
 		if parent.stats.health>0:
 			attacker.stored_body=parent
 		else:
 			attacker.stored_body=null
-
+	if parent.is_in_group("Player") or parent.is_in_group("player") or (attacker!=null and attacker.is_in_group("Player")):
+		spawnDamageText(final_damages,is_crit,is_penetrating_hit)
 	if is_instance_valid($"../UI/Menu/CharacterBar"):
 		$"../UI/Menu/CharacterBar".updateBars()
 
-	spawnDamageText(final_damages,is_crit,is_penetrating_hit)
 
-
-func getHeal(source:Node, heal_amount:float)->void:
-	var total_heal:float = heal_amount
-	if source != null and source.is_in_group("Entity") and source.has_node("Stats"):
-		var vitality = getTotalAttribute("vitality")
-		total_heal *= 1.0 + (vitality * 0.05)
-
-	health += total_heal
-
-	if health > max_health:
-		health = max_health
-
-	if is_instance_valid($"../UI/Menu/CharacterBar"):
-		$"../UI/Menu/CharacterBar".updateBars()
-
-	spawnHealText({ "heal": total_heal })
-
-
-
-
+	getKilled()
 func spawnDamageText(damages: Dictionary,is_crit: bool = false,is_penetrating_hit: bool = false) -> void:
 	var text := ""
 	if is_crit:
@@ -1191,6 +1282,54 @@ func spawnHealText(heals: Dictionary) -> void:
 
 
 
+
+
+func selfBuff():
+	var skill_name = parent.current_skill
+	if Skills != null and Skills.status_effects is Dictionary and Skills.status_effects.has(skill_name):
+				if Skills.status_effects[skill_name] is Dictionary:
+					for status_name in Skills.status_effects[skill_name]:
+						applyStatus(status_name, parent,skill_name)
+
+func getHeal(source:Node, heal_amount:float)->void:
+	var total_heal:float = heal_amount
+	if source != null and source.is_in_group("Entity") and source.has_node("Stats"):
+		var vitality = getTotalAttribute("vitality")
+		total_heal *= 1.0 + (vitality * 0.05)
+
+	if parent.is_downed ==true:
+		parent.anim_locks["get up"] = true
+		parent.is_downed = false
+		health += total_heal * 0.3
+
+	elif parent.is_dead == false:
+		health += total_heal
+		
+	if health > max_health:
+		health = max_health
+	
+	if is_instance_valid($"../UI/Menu/CharacterBar"):
+		$"../UI/Menu/CharacterBar".updateBars()
+
+	spawnHealText({ "heal": total_heal })
+
+
+func getKilled():
+	if parent.is_in_group("Entity"):
+		if parent.is_in_group("Player"):
+			if health <=0:
+				if parent.is_dead == false:
+					parent.unlockAnim()
+					parent.anim_locks["downed"] = true
+					parent.is_downed = true
+					if parent.is_downed == true:
+						parent.unlockAnim()
+						parent.anim_locks["downed die"] = true
+						parent.is_dead = true
+		else:
+			if parent.is_dead == false:
+				parent.anim_locks["die"] = true
+				parent.is_dead = true
 
 
 
@@ -1300,7 +1439,6 @@ func regenerate(value, resource, max_resource):
 		
 func serializeStatuses(statuses:Dictionary)->Dictionary:
 	var out = {}
-
 	for status_name in statuses.keys():
 		var s = statuses[status_name]
 
@@ -1363,13 +1501,6 @@ func deserializeStatuses(data:Dictionary)->Dictionary:
 	return out
 
 func debugDamage(amount: float = 10.0) -> void:
-
 	var damages = {damage_type.bleed: amount}
 	if parent.is_in_group("Player"):
-		getHit(
-			parent,
-			damages,
-			false,
-			0.0,
-			false
-		)
+		getHit(parent,damages,false,0.0,false)
