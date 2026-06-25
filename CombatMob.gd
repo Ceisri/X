@@ -289,10 +289,7 @@ func rotateToTargetMelee(speed:float,target_pos:Vector3):
 	if parent.is_running:
 		current_turn_speed = run_turn_speed
 
-	parent.global_transform.basis = parent.global_transform.basis.slerp(
-		target_transform.basis,
-		speed * current_turn_speed
-	)
+	parent.global_transform.basis = parent.global_transform.basis.slerp(target_transform.basis,speed * current_turn_speed)
 
 	var forward = -parent.global_transform.basis.z.normalized()
 	forward.y = 0

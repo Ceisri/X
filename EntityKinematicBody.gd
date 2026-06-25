@@ -2,7 +2,7 @@ extends KinematicBody
 
 onready var stats = $Stats
 onready var combat = $Combat
-
+onready var skill_anim = null
 onready var ray_forward =$RayForward
 onready var ray_left = $RayFrontLeft
 onready var ray_right = $RayFrontRight
@@ -19,7 +19,7 @@ var stored_body:KinematicBody = null
 var nav_path = []
 var nav_index = 0
 var wander_target = Vector3.ZERO
-
+var  movement_mode = ""
 onready var nav = get_parent().get_node("Terrain")
 
 
@@ -50,6 +50,8 @@ var anim_locks = {
 	"downed":true,
 	"get up":false,
 	"downed die":false,
+	"guard":false,
+	"parry":false,
 	"flinch":false,
 	"knocked back":false,
 	"atk1":false,
@@ -60,7 +62,6 @@ var anim_locks = {
 	"atk6":false,
 	"dodge":false,
 	"stop_run":false,
-	"parry":false,
 	"sit":false,
 	"stop_sit":false,
 	"scream":false,
@@ -115,7 +116,7 @@ func switchState():
 		is_dead = false
 		anim_locks["die"] = false
 
-		var highest = find_highest_aggro_target()
+		var highest = findHighestAggro()
 
 		if highest:
 			target = highest.target_entity
@@ -315,10 +316,10 @@ func attractPredators():
 					var aggro = (health_factor * 10.0) + (food_chain_factor * 5.0)
 					body.emptyAggro(self,aggro)
 func emptyAggro(prey:Node, aggro:float) -> void:
-	var instigatorAggro = get_or_create_aggro_target(prey)
+	var instigatorAggro = getAggro(prey)
 	instigatorAggro.aggro += aggro
 	
-func get_or_create_aggro_target(target_entity: Node) -> AggroTarget:
+func getAggro(target_entity: Node) -> AggroTarget:
 	for existing_target in targets:
 		if existing_target.target_entity == target_entity:
 			return existing_target
@@ -326,7 +327,7 @@ func get_or_create_aggro_target(target_entity: Node) -> AggroTarget:
 	aggro_target.target_entity = target_entity
 	targets.append(aggro_target)
 	return aggro_target
-func find_highest_aggro_target() -> AggroTarget:
+func findHighestAggro() -> AggroTarget:
 	var highest_aggro = -1
 	var target : AggroTarget = null
 	for aggro_target in targets:
@@ -355,46 +356,7 @@ func cleanup_aggro_targets():
 				remaining_targets.append(aggro_target)
 	targets = remaining_targets
 #_______________________________Debugging_______________________________________
-func debug(rich_text_label):
-	var dir = get_meta("dir") if has_meta("dir") else Vector3.ZERO
-	var state_next = get_meta("state_next") if has_meta("state_next") else 0
-	var move_next = get_meta("move_state_next") if has_meta("move_state_next") else 0
-	var sit_next = get_meta("sit_next") if has_meta("sit_next") else 0
-	var next_switch = get_meta("next_switch") if has_meta("next_switch") else 0
-	var anim = animation.current_animation
-	var aggro_info = ""
-	var lock_info = ""
 
-	for aggro_target in team_aggro():
-		if is_instance_valid(aggro_target.target_entity):
-			aggro_info += aggro_target.target_entity.name + ":" + str(round(aggro_target.aggro)) + "\n"
-
-	for key in anim_locks:
-		if anim_locks[key]:
-			lock_info += key + "\n"
-
-	rich_text_label.text = \
-	"can move: " + str(can_move) + "\n" + \
-	"sequence: " + str(combat.melee_step) + "\n" + \
-	"Targets: " + str(targets.size()) + "\n" + \
-	"Aggro:\n" + aggro_info + \
-	"Anim: " + str(anim) + "\n" + \
-	"Locks:\n" + lock_info + \
-	"Sitting: " + str(is_sitting) + "\n" + \
-	"Sit Next: " + str(sit_next) + "\n" + \
-	"Stopped: " + str(get_meta("is_stopped") if has_meta("is_stopped") else false) + "\n" + \
-	"Moving: " + str(get_meta("is_moving") if has_meta("is_moving") else false) + "\n" + \
-	"Walking: " + str(is_walking) + "\n" + \
-	"Running: " + str(is_running) + "\n" + \
-	"Dir: " + str(dir) + "\n" + \
-	"thirst: " + str(stats.hydration) + "\n" + \
-	"Walk Speed: " + str(stats.walk_speed) + "\n" + \
-	"Run Speed: " + str(stats.run_speed) + "\n" + \
-	"Pos: " + str(global_transform.origin) + "\n" + \
-	"Rot: " + str(rotation_degrees) + "\n" + \
-	"State Next: " + str(state_next) + "\n" + \
-	"Move Next: " + str(move_next) + "\n" + \
-	"Dir Switch: " + str(next_switch)
 #_______________________________Animation_______________________________________
 var blend = 0.25
 func playAnim(anim_name:String,anim_blend:float = blend):
