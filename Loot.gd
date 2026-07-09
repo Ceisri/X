@@ -3,7 +3,7 @@ extends Control
 onready var player = $"../.."
 onready var loot_grid = $ScrollContainer/GridContainer
 onready var loot_slot_holder = $ScrollContainer/GridContainer/LootSlot
-onready var label_debug = $Label
+
 onready var area =  $"../../Turnable/Area"
 onready var close_button = $Close
 
@@ -20,6 +20,10 @@ func _ready():
 var grabbed_corpse = null
 var grabbed_collision_shapes = []
 func _physics_process(delta):
+	if Engine.get_physics_frames() % 12 == 0:
+		checkForRevives()
+		if visible:
+			autoFixStackables()
 	if Input.is_action_just_pressed("loot"):
 		var corpse = getDeadBodyInArea()
 		updateSlots()
@@ -40,6 +44,52 @@ func _physics_process(delta):
 	if grabbed_corpse:
 		updateGrabbedCorpse()
 		
+		
+
+func autoFixStackables()->void:
+	var stacked_textures={}
+
+	for slot in loot_grid.get_children():
+		var texture=slot.get_node("Slot").texture
+		if !texture:continue
+
+		if player.inventory.isArmor(texture):
+			slot.stackable=false
+			continue
+
+		var is_weapon=false
+		for key in Items.weapons:
+			if CommonBehaviours.sameIcon(Items.weapons[key]["icon"],texture):
+				is_weapon=true
+				break
+
+		if is_weapon:
+			slot.stackable=false
+			continue
+
+		if slot.quantity>1:
+			stacked_textures[texture]=true
+
+	for slot in loot_grid.get_children():
+		var texture=slot.get_node("Slot").texture
+		if !texture:continue
+
+		if player.inventory.isArmor(texture):
+			slot.stackable=false
+			continue
+
+		var is_weapon=false
+		for key in Items.weapons:
+			if CommonBehaviours.sameIcon(Items.weapons[key]["icon"],texture):
+				is_weapon=true
+				break
+
+		if is_weapon:
+			slot.stackable=false
+		elif stacked_textures.has(texture):
+			slot.stackable=true
+		
+		
 func grabCorpse(corpse):
 	grabbed_corpse = corpse
 
@@ -54,7 +104,10 @@ func grabCorpse(corpse):
 		corpse.linear_velocity = Vector3.ZERO
 		corpse.angular_velocity = Vector3.ZERO
 		
-		
+
+
+
+
 func disableCollisionsRecursive(node):
 	for child in node.get_children():
 
@@ -102,7 +155,9 @@ func getDeadBodyInArea():
 				return body
 	return null
 
-var last_health = {} # corpseKey -> previous health
+var last_health = {}
+var last_dead = {}
+var last_respawn_id = {}
 func resetCorpseLoot(corpse):
 	if corpse == null:
 		return
@@ -117,37 +172,59 @@ func checkForRevives():
 
 		var corpseKey = getCorpseKey(body)
 		var currentHealth = body.stats.health
+		var currentDead = body.is_dead if "is_dead" in body else currentHealth <= 0
 
 		if !last_health.has(corpseKey):
 			last_health[corpseKey] = currentHealth
+			last_dead[corpseKey] = currentDead
 			continue
 
 		var previousHealth = last_health[corpseKey]
+		var previousDead = last_dead.get(corpseKey,currentDead)
 
-		# dead -> alive transition
 		if previousHealth <= 0 and currentHealth > 0:
 			resetCorpseLoot(body)
 
-		last_health[corpseKey] = currentHealth
+		if previousDead and !currentDead:
+			resetCorpseLoot(body)
 
-	# repeat for "Entity" group if you use both
+		if currentHealth > 0 and !currentDead and (previousHealth <= 0 or previousDead):
+			resetCorpseLoot(body)
+		var currentRespawnId = body.respawn_id
+		if last_respawn_id.get(corpseKey,-1) != currentRespawnId:
+			resetCorpseLoot(body)
+
+		last_respawn_id[corpseKey] = currentRespawnId
+		last_health[corpseKey] = currentHealth
+		last_dead[corpseKey] = currentDead
+
 	for body in get_tree().get_nodes_in_group("Entity"):
 		if !"stats" in body:
 			continue
 
 		var corpseKey = getCorpseKey(body)
 		var currentHealth = body.stats.health
+		var currentDead = body.is_dead if "is_dead" in body else currentHealth <= 0
 
 		if !last_health.has(corpseKey):
 			last_health[corpseKey] = currentHealth
+			last_dead[corpseKey] = currentDead
 			continue
 
 		var previousHealth = last_health[corpseKey]
+		var previousDead = last_dead.get(corpseKey,currentDead)
 
 		if previousHealth <= 0 and currentHealth > 0:
 			resetCorpseLoot(body)
 
+		if previousDead and !currentDead:
+			resetCorpseLoot(body)
+
+		if currentHealth > 0 and !currentDead and (previousHealth <= 0 or previousDead):
+			resetCorpseLoot(body)
+
 		last_health[corpseKey] = currentHealth
+		last_dead[corpseKey] = currentDead
 
 func getCorpseKey(body):
 	return body.stats.species + "_" + body.stats.Name + "_" + body.name
@@ -165,7 +242,6 @@ func openCorpseLoot(corpse):
 
 	clearLootGrid()
 	loadLootIntoGrid(corpse_loot_data[corpseKey])
-	
 	show()
 
 
@@ -175,12 +251,34 @@ func openCorpseLoot(corpse):
 func loadLootIntoGrid(lootData):
 	ensureSlotCount(lootData.size())
 
-	for i in range(lootData.size()):
-		var holder = loot_grid.get_child(i)
+	var categories={
+		"food":Items.food,
+		"flasks":Items.flasks,
+		"weapons":Items.weapons,
+		"armors":Items.armors,
+		"rings":Items.rings,
+		"necklaces":Items.necklaces
+	}
 
-		holder.quantity = lootData[i]["quantity"]
-		holder.get_node("Slot").texture = Items.food[lootData[i]["item_key"]]["icon"]
-		
+	for i in range(lootData.size()):
+		var holder=loot_grid.get_child(i)
+		var item=lootData[i]
+		var data=null
+
+		if item.has("category"):
+			data=categories[item["category"]].get(item["item_key"],null)
+		else:
+			for category in categories.values():
+				if category.has(item["item_key"]):
+					data=category[item["item_key"]]
+					break
+
+		if !data:
+			continue
+
+		holder.quantity=item.get("quantity",1)
+		var icon=data["icon"]
+		holder.get_node("Slot").texture=load(icon) if typeof(icon)==TYPE_STRING else icon
 func ensureSlotCount(amount):
 	while loot_grid.get_child_count() < amount:
 		var newSlot = loot_slot_holder.duplicate()
@@ -203,42 +301,50 @@ func closeLoot():
 
 	current_corpse = null
 
-func saveCurrentCorpseLoot():
-	if current_corpse == null:
-		return
 
-	var corpseKey = getCorpseKey(current_corpse)
-	var savedLoot = []
+func saveCurrentCorpseLoot():
+	if current_corpse==null:return
+
+	var corpseKey=getCorpseKey(current_corpse)
+	var savedLoot=[]
+
+	var categories={
+		"food":Items.food,
+		"flasks":Items.flasks,
+		"weapons":Items.weapons,
+		"armors":Items.armors,
+		"rings":Items.rings,
+		"necklaces":Items.necklaces
+	}
 
 	for child in loot_grid.get_children():
-		var slot = child.get_node("Slot")
+		var texture=child.get_node("Slot").texture
+		if !texture:continue
 
-		if slot.texture != null:
-
-			var itemKey = ""
-
-			for key in Items.food:
-				if Items.food[key]["icon"] == slot.texture:
-					itemKey = key
+		for category_name in categories:
+			var category=categories[category_name]
+			for item_key in category:
+				if CommonBehaviours.sameIcon(category[item_key]["icon"],texture):
+					savedLoot.append({
+						"category":category_name,
+						"item_key":item_key,
+						"quantity":child.quantity
+					})
 					break
 
-			if itemKey != "":
-				savedLoot.append({
-					"item_key": itemKey,
-					"quantity": child.quantity
-				})
-
-	corpse_loot_data[corpseKey] = savedLoot
+	corpse_loot_data[corpseKey]=savedLoot
 
 func saveData():
 	saveCurrentCorpseLoot()
 
 	var file = File.new()
 
-	if file.open("user://corpse_loot.save", File.WRITE) == OK:
-		file.store_var(corpse_loot_data)
+	if file.open("user://corpse_loot.save",File.WRITE) == OK:
+		file.store_var({
+			"corpse_loot_data":corpse_loot_data,
+			"last_respawn_id":last_respawn_id
+		})
 		file.close()
-
 
 func loadData():
 	var file = File.new()
@@ -246,12 +352,21 @@ func loadData():
 	if !file.file_exists("user://corpse_loot.save"):
 		return
 
-	if file.open("user://corpse_loot.save", File.READ) != OK:
+	if file.open("user://corpse_loot.save",File.READ) != OK:
 		return
 
-	corpse_loot_data = file.get_var()
+	var data = file.get_var()
 	file.close()
+
+	if typeof(data) == TYPE_DICTIONARY:
+		corpse_loot_data = data.get("corpse_loot_data",{})
+		last_respawn_id = data.get("last_respawn_id",{})
+	else:
+		corpse_loot_data = data
+
 	updateSlots()
+
+
 
 
 

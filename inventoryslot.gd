@@ -14,6 +14,10 @@ var max_quantity = 9999999999
 
 
 func _ready():
+	if quantity >= 2:
+		stackable = true
+	else:
+		stackable = false
 	if not icon:
 		print("InventorySlot: missing Slot node")
 	if not quantity_label:
@@ -27,7 +31,6 @@ func _ready():
 
 func set_quantity(value):
 	quantity = value
-	emit_signal("quantity_changed", quantity)
 
 
 func updateStackableFromTexture():
@@ -82,7 +85,9 @@ func get_drag_data(position:Vector2):
 	}
 
 
-func can_drop_data(p,d):return typeof(d)==TYPE_DICTIONARY and d.has("origin_texture") and d.has("origin_icon")
+func can_drop_data(position,data):
+	return typeof(data)==TYPE_DICTIONARY and data.has("origin_texture") and data.has("origin_icon")
+
 
 func drop_data(position,data):
 	if typeof(data)!=TYPE_DICTIONARY:return

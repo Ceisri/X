@@ -13,12 +13,11 @@ onready var skillbar = $UI/Skillbar
 onready var loot = $UI/Loot
 onready var inventory = $UI/Inventory
 onready var turnable:Spatial = $Turnable
-onready var debug_label:Label = $Label
+
 var save_id = "Player"
+var respawn_id:int = 0
 var entity_name = "Kairos"
 export var gravity = 9.8 
-export var walk_speed = 6
-export var dash_power = 50 
 # Physics values
 var direction = Vector3()
 var horizontal_velocity = Vector3()
@@ -39,7 +38,6 @@ var is_on_stairs: bool = false
 var wall_hanging:bool = false
 onready var head_ray = $Turnable/Vault
 onready var climb_ray = $Turnable/MidRay
-onready var stair_check: RayCast = $Turnable/Stairs
 onready var root_bone = skeleton.find_bone("ik_foot_root")
 var root_motion_active:bool= false
 var last_root_pos := Vector3.ZERO
@@ -57,7 +55,10 @@ enum WeaponMode {
 	TWO_HANDED
 }
 func _ready():
-	animation.set_script(load("res://world/player/scenes/AnimationPlayer.gd"))
+	ApplySex()
+	
+	$character/root/Skeleton/Mesh.hide()
+	equipment.updateEquipment()
 	for child in $UI/Skillbar/GridContainer.get_children():
 		child.get_node("Slot").player=self
 		child.get_node("TextureButton").parent=self
@@ -65,19 +66,24 @@ func _ready():
 	direction=Vector3.BACK.rotated(Vector3.UP,$Camroot/h.global_transform.basis.get_euler().y)
 	initializeAnimationBlends()
 
+
 var weapons:int = WeaponMode.NONE
 var skill_start_time:int = 0
 var current_skill:String = "none"
 var anim_locks = { 
 	"combo attack":false,
-	"downed":true,
+
+	"guard":false,
+	"downed":false,
 	"get up":false,
 	"die":false,
 	"downed die":false,
 	"flinch":false,
+	"flinch  back":false,
 	"knocked back":false,
-	
-	
+	"knocked down":false,
+	"guard react":false,
+
 #BERSERK SKILLS
 	"raze":false,
 	"reckless vengeance":false,
@@ -94,13 +100,10 @@ var anim_locks = {
 	"sledge":false,
 	
 
-	"backstep":false,
 	"death from above":false,
 	"flury of blows":false,
 	"section":false,
 	"perforation trifecta":false,
-	"block":false,
-	"block_react":false,
 	"dodge":false,
 	"cleave":false,
 	"battlecry":false,
@@ -118,19 +121,70 @@ var anim_locks = {
 
 
 var interrupt_groups = {
-	"hard_interrupt":["dodge","block","parry"],
+	"hard_interrupt":["dodge","block","parry","guard react"],
 	"skills":["section","perforation trifecta","cleave","battlecry","scream","stone splitter"],
 	"base_attack":["combo attack"]
 }
 
 
-var skill_animations = {#remember to replace placeholders
+var skill_animations = {
+	
+	
+	"mine":{
+		WeaponMode.NONE:"mine_cycle",
+		WeaponMode.SWORD:"mine_cycle",
+		WeaponMode.DUAL:"mine_cycle",
+		WeaponMode.SHIELD:"mine_cycle",
+		WeaponMode.TWO_HANDED:"mine_cycle",
+	},
+	"chop":{
+		WeaponMode.NONE:"chop_cycle",
+		WeaponMode.SWORD:"chop_cycle",
+		WeaponMode.DUAL:"chop_cycle",
+		WeaponMode.SHIELD:"chop_cycle",
+		WeaponMode.TWO_HANDED:"chop_cycle",
+	},
 	"combo attack":{
-		WeaponMode.NONE:"ComboATK_Empty",
+		WeaponMode.NONE:"ComboATK_Empty_cycle",
 		WeaponMode.SWORD:"ComboATK_OneHanded_cycle",
-		WeaponMode.DUAL:"ComboATK_OneHanded_cycle",
+		WeaponMode.DUAL:"ComboATK_Dual",
 		WeaponMode.SHIELD:"ComboATK_OneHanded_cycle",
 		WeaponMode.TWO_HANDED:"ComboATK_TwoHanded_cycle",
+	},
+	"penetrating blow":{
+		WeaponMode.SWORD:"Basic_Stab_OneHanded",
+		WeaponMode.DUAL:"Basic_Stab_OneHanded",
+		WeaponMode.SHIELD:"Basic_Stab_OneHanded",
+		WeaponMode.TWO_HANDED:"Basic_Stab_TwoHanded",
+		#WeaponMode.BOW:"Basic_PenetratingShot",
+	},
+	"evasion":{
+		WeaponMode.NONE:"Roll_Generic",
+		WeaponMode.SWORD:"Roll_Generic",
+		WeaponMode.DUAL:"Roll_Generic",
+		WeaponMode.SHIELD:"Roll_Generic",
+		WeaponMode.TWO_HANDED:"Roll_TwoHanded",
+	},
+	"backstep":{
+		WeaponMode.NONE:"Basic_Generic_Backstep",
+		WeaponMode.SWORD:"Basic_Generic_Backstep",
+		WeaponMode.DUAL:"Basic_Generic_Backstep",
+		WeaponMode.SHIELD:"Basic_Generic_Backstep",
+		WeaponMode.TWO_HANDED:"Basic_TwoHanded_Backstep",
+	},
+	"guard":{
+		WeaponMode.NONE:"Guard_Unarmed_cycle",
+		WeaponMode.SWORD:"Guard_Sword_cycle",
+		WeaponMode.DUAL:"Guard_Dual_cycle",
+		WeaponMode.SHIELD:"Guard_Shield_cycle",
+		WeaponMode.TWO_HANDED:"Guard_Sword_cycle",
+	},
+	"guard react":{
+		WeaponMode.NONE:"Guard_Unarmed_react",
+		WeaponMode.SWORD:"Guard_General_react",
+		WeaponMode.DUAL:"Guard_Dual_react",
+		WeaponMode.SHIELD:"Guard_Shield_react",
+		WeaponMode.TWO_HANDED:"Guard_General_react",
 	},
 	"downed die":{
 		WeaponMode.NONE:"DownedDie",
@@ -153,7 +207,13 @@ var skill_animations = {#remember to replace placeholders
 		WeaponMode.SHIELD:"DownedEnd",
 		WeaponMode.TWO_HANDED:"DownedEnd",
 	},
-
+	"flinch  back":{
+		WeaponMode.NONE:"FlinchBack_OneHanded",
+		WeaponMode.SWORD:"FlinchBack_OneHanded",
+		WeaponMode.DUAL:"FlinchBack_OneHanded",
+		WeaponMode.SHIELD:"FlinchBack_OneHanded",
+		WeaponMode.TWO_HANDED:"FlinchBack_TwoHanded",
+	},
 	"flinch":{
 		WeaponMode.NONE:"Flinch_OneHanded",
 		WeaponMode.SWORD:"Flinch_OneHanded",
@@ -169,6 +229,101 @@ var skill_animations = {#remember to replace placeholders
 		WeaponMode.SHIELD:"FlinchKnockedBack_OneHanded",
 		WeaponMode.TWO_HANDED:"FlinchKnockedBack_TwoHanded",
 	},
+	"knocked down":{
+		WeaponMode.NONE:"KnockedDown_OneHanded",
+		WeaponMode.SWORD:"KnockedDown_OneHanded",
+		WeaponMode.DUAL:"KnockedDown_OneHanded",
+		WeaponMode.SHIELD:"KnockedDown_OneHanded",
+		WeaponMode.TWO_HANDED:"KnockedDown_TwoHanded",
+	},
+
+
+#WARDEN SKLLLS
+"veiled thrust":{
+		WeaponMode.SWORD:"Warden_VeiledThrust_OneHanded",
+		WeaponMode.DUAL:"Warden_VeiledThrust_OneHanded",
+		WeaponMode.SHIELD:"Warden_VeiledThrust_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_VeiledThrust_TwoHanded",
+	},
+"shield bash":{
+		WeaponMode.NONE:"Warden_Bash_OneHanded",
+		WeaponMode.SWORD:"Warden_Bash_OneHanded",
+		WeaponMode.DUAL:"Warden_Bash_OneHanded",
+		WeaponMode.SHIELD:"Warden_Bash_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_Bash_TwoHanded",
+	},
+"shield pummel":{
+		WeaponMode.NONE:"Warden_ShieldPummel_OneHanded",
+		WeaponMode.SWORD:"Warden_ShieldPummel_OneHanded",
+		WeaponMode.DUAL:"Warden_ShieldPummel_OneHanded",
+		WeaponMode.SHIELD:"Warden_ShieldPummel_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_ShieldPummel_TwoHanded",
+	},
+"mighty push":{
+		WeaponMode.NONE:"Warden_MightyPush_OneHanded",
+		WeaponMode.SWORD:"Warden_MightyPush_OneHanded",
+		WeaponMode.DUAL:"Warden_MightyPush_OneHanded",
+		WeaponMode.SHIELD:"Warden_MightyPush_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_MightyPush_TwoHanded",
+	},
+"smite":{
+		WeaponMode.SWORD:"Warden_Smite_OneHanded",
+		WeaponMode.DUAL:"Warden_Smite_OneHanded",
+		WeaponMode.SHIELD:"Warden_Smite_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_Smite_TwoHanded",
+	},
+"aegis":{
+		WeaponMode.NONE:"Rally",
+		WeaponMode.SWORD:"Rally",
+		WeaponMode.DUAL:"Rally",
+		WeaponMode.SHIELD:"Rally",
+		WeaponMode.TWO_HANDED:"Rally",
+	},
+"second wind":{
+		WeaponMode.NONE:"Scream_OneHanded",
+		WeaponMode.SWORD:"Scream_OneHanded",
+		WeaponMode.DUAL:"Scream_OneHanded",
+		WeaponMode.SHIELD:"Scream_OneHanded",
+		WeaponMode.TWO_HANDED:"Scream_TwoHanded",
+	},
+"counterstrike":{
+		WeaponMode.NONE:"Warden_CounterStrike_OneHanded",
+		WeaponMode.SWORD:"Warden_CounterStrike_OneHanded",
+		WeaponMode.DUAL:"Warden_CounterStrike_OneHanded",
+		WeaponMode.SHIELD:"Warden_CounterStrike_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_CounterStrike_TwoHanded",
+	},
+"intercept":{
+		WeaponMode.NONE:"Warden_Intercept_OneHanded",
+		WeaponMode.SWORD:"Warden_Intercept_OneHanded",
+		WeaponMode.DUAL:"Warden_Intercept_OneHanded",
+		WeaponMode.SHIELD:"Warden_Intercept_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_Intercept_TwoHanded",
+	},
+
+
+#DROMEUS SKILLS
+"cross draw":{
+		WeaponMode.NONE:"Dromeus_CrossDraw_Dual",
+		WeaponMode.SWORD:"Dromeus_CrossDraw_Dual",
+		WeaponMode.DUAL:"Dromeus_CrossDraw_Dual",
+		WeaponMode.SHIELD:"Dromeus_CrossDraw_Dual",
+		WeaponMode.TWO_HANDED:"Dromeus_CrossDraw_Dual",
+	},
+"lunar slash":{
+		WeaponMode.NONE:"Dromeus_LunarSlash_Dual",
+		WeaponMode.SWORD:"Dromeus_LunarSlash_Dual",
+		WeaponMode.DUAL:"Dromeus_LunarSlash_Dual",
+		WeaponMode.SHIELD:"Dromeus_LunarSlash_Dual",
+		WeaponMode.TWO_HANDED:"Dromeus_LunarSlash_Dual",
+	},
+"recoil slash":{
+		WeaponMode.NONE:"Dromeus_RecoilSlash_OneHanded",
+		WeaponMode.SWORD:"Dromeus_RecoilSlash_OneHanded",
+		WeaponMode.DUAL:"Dromeus_RecoilSlash_OneHanded",
+		WeaponMode.SHIELD:"Dromeus_RecoilSlash_OneHanded",
+		WeaponMode.TWO_HANDED:"Dromeus_RecoilSlash_OneHanded",
+	},
 #BERSERK SKILLS
 	"raze":{
 		WeaponMode.SWORD:"Berserk_Raze_OneHanded",
@@ -176,7 +331,7 @@ var skill_animations = {#remember to replace placeholders
 		WeaponMode.SHIELD:"Berserk_Raze_OneHanded",
 		WeaponMode.TWO_HANDED:"Berserk_Raze_TwoHanded",
 	},
-	"reckless vengeance":{
+	"reckless":{
 		WeaponMode.SWORD:"Buff_OneHanded",
 		WeaponMode.DUAL:"Buff_OneHanded",
 		WeaponMode.SHIELD:"Buff_OneHanded",
@@ -288,13 +443,7 @@ var skill_animations = {#remember to replace placeholders
 		WeaponMode.SHIELD:"ALL_SwordGuard",
 		WeaponMode.TWO_HANDED:"Backstep",
 	},
-	"guard":{
-		WeaponMode.NONE:"Guard_Unarmed",
-		WeaponMode.SWORD:"ALL_SwordGuard_cycle",
-		WeaponMode.DUAL:"ALL_SwordGuard_cycle",
-		WeaponMode.SHIELD:"Guard_Shield",
-		WeaponMode.TWO_HANDED:"ALL_SwordGuard_cycle",
-	},
+
 
 	"dodge":{
 		WeaponMode.NONE:"Basic_Slide_OneHanded",
@@ -313,22 +462,23 @@ var skill_animations = {#remember to replace placeholders
 
 }
 var last_skill_animation:String =""
-func activateAnimLock(lock_name:String)->void:#Anim cancels here 
-	if !anim_locks.has(lock_name):
-		return
-	# Nothing can happen while dodge is active
-	if anim_locks["dodge"] and lock_name != "dodge":
-		return
-	if lock_name == "dodge":
+var guard_react_priority := false
+
+func activateAnimLock(lock_name:String)->void:
+	if lock_name=="guard react":
 		unlockAnim()
-		anim_locks["dodge"] = true
-		current_skill = "dodge"
+		guard_react_priority=true
+		anim_locks.clear()
+		anim_locks["guard react"]=true
+		current_skill="guard"
 		return
-	if lock_name == "parry":
-		unlockAnim()
-		anim_locks["parry"] = true
-		current_skill = "parry"
-		return
+	guard_react_priority=false
+	if anim_locks["dodge"] and lock_name!="dodge": return
+	if lock_name=="dodge":
+		unlockAnim();anim_locks["dodge"]=true;current_skill="dodge";return
+	if lock_name=="parry":
+		unlockAnim();anim_locks["parry"]=true;current_skill="parry";return
+
 
 	if lock_name == "combo attack":
 		for key in anim_locks:
@@ -347,17 +497,13 @@ func activateAnimLock(lock_name:String)->void:#Anim cancels here
 
 		anim_locks[lock_name] = true
 		current_skill = lock_name
-#func getActiveAnimLock()->String:
-#	for lock_name in anim_locks:
-#		if anim_locks[lock_name]:
-#			return lock_name
-#	return ""
+
 func getActiveAnimLock()->String:
 	var active_locks=[]
 	for lock_name in anim_locks:
 		if anim_locks[lock_name]:
 			active_locks.append(lock_name)
-	$Debug1.text=", ".join(active_locks)  
+	 $UI/Chat/debug.text=", ".join(active_locks)  
 	if active_locks.size()>0:
 		return active_locks[0]
 	return ""
@@ -387,12 +533,14 @@ func setSkillAnimation(skill_name:String)->void:
 		if anim_locks["flinch"] == false or anim_locks["knocked back"] == false:
 			unlockAnim()
 		skillbar.reimburseSkill(skill_name)
+		animation_tree.active =true
 		return
 
 	if new_anim == "":
 		anim_locks[skill_name] = false
 		current_skill = "none"
 		skillbar.reimburseSkill(skill_name)
+		animation_tree.active =true
 		return
 
 	# Same skill still active this frame.
@@ -541,7 +689,16 @@ func setRunAnimation()->void:
 	run_node.animation = anim
 
 var skillExitBlendSpeed:float = 2.0
+
 func animationOrder() -> void:
+	if stats.debuff_buffs_active.has("stunned") and float(stats.debuff_buffs_active["stunned"].get("duration",0.0)) > 0.0:
+		animation_tree.set("parameters/CombatSwitch/blend_amount", 0.0)
+		animation_tree.set("parameters/MovementType/blend_amount", 0.0)
+		animation_tree.set("parameters/CrouchOrNot/blend_amount", 1.0)
+		animation_tree.set("parameters/Movement/blend_amount", -1.0)
+		animation_tree.set("parameters/IsInCombat/blend_amount", 0.0)
+		animation_tree.active = true
+		return
 	#leave animaiton_tree off by default 
 	var delta:float =get_process_delta_time()
 	var active_lock:=getActiveAnimLock()
@@ -554,6 +711,17 @@ func animationOrder() -> void:
 			anim_calls.speed_up_combo_until.erase(active_lock)
 
 	animation_tree.set("parameters/SkillTimeScale/scale", skill_scale)
+	
+	var speed_factor_walk = max(0.0, stats.walk_speed / 4.0)
+	if speed_factor_walk > 1.0:
+		speed_factor_walk = 1.0 + sqrt(speed_factor_walk - 1.0) * 0.5
+	animation_tree.set("WalkSpeed", speed_factor_walk)
+	var speed_factor_run = max(0.0, stats.run_speed / 15.5)
+	if speed_factor_run > 1.0:
+		speed_factor_run = 1.0 + (speed_factor_run - 1.0) * 0.25
+	animation_tree.set("RunSpeed", speed_factor_run)
+	
+	
 	# -----------------------------
 	# STAGGER / STUN OVERRIDE
 	# -----------------------------
@@ -594,7 +762,6 @@ func animationOrder() -> void:
 		# ------------------------------------------------------------
 		# Leave combat state smoothly.
 		# ------------------------------------------------------------
-		var leave_speed = 10.0
 
 		if flip_blend_timer > 0.0:
 			animation_tree.set("parameters/CombatSwitch/blend_amount",1.0)
@@ -674,7 +841,7 @@ func animationOrder() -> void:
 						else:
 							animation_tree.set("parameters/IsInCombatRun/blend_amount",0)
 						movement_target=1.0
-						animation_tree.set("parameters/RunSpeed/scale",0.8+(0.0125*stats.derived_stats["run_speed"]))
+						animation_tree.set("parameters/RunSpeed/scale",0.8+(0.0125*stats.run_speed))
 						
 				# ----------------------------------------------------
 				# CROUCH IDLE
@@ -682,14 +849,16 @@ func animationOrder() -> void:
 				"crouch_idle":
 					crouch_target=0.0
 					crouch_mode_target=0.0
-
+					animation_tree.set("parameters/CrouchMov/blend_amount",0)
+					animation_tree.set("parameters/IsInCombatRun/blend_amount",0)
 				# ----------------------------------------------------
 				# CROUCH MOVEMENT
 				# ----------------------------------------------------
 				"crouch_moving":
 					crouch_target=0.0
 					crouch_mode_target=1.0
-
+					animation_tree.set("parameters/CrouchMov/blend_amount",1)
+					animation_tree.set("parameters/IsInCombatRun/blend_amount",0)
 				# ----------------------------------------------------
 				# CLIMB
 				# ----------------------------------------------------
@@ -729,7 +898,7 @@ func animationOrder() -> void:
 		# ============================================================
 		setAnimBlend("parameters/Movement/blend_amount",movement_target,8.0,delta)
 		setAnimBlend("parameters/MovementType/blend_amount",movement_type_target,8.0,delta)
-		setAnimBlend("parameters/Vertical/blend_amount",vertical_target,8.0,delta)
+
 
 		setAnimBlend("parameters/CrouchOrNot/blend_amount",crouch_target,8.0,delta)
 		setAnimBlend("parameters/CrouchMode/blend_amount",crouch_mode_target,8.0,delta)
@@ -744,27 +913,54 @@ func animationOrder() -> void:
 		
 
 export var root_motion_scale:float = 0.01
+
+onready var detection_area:Area = $Turnable/Area
+
+var root_motion_exceptions = [
+	"shoulder bash",
+	"backstep",
+	"evasion",
+	"foresight slash",
+	"lunar slash"
+]
+
 func rootMotion(delta)->void:
+	if current_skill == "backstep":
+		root_motion_scale = 0.01 * stats.attributes["agility"] * 1.25
+
+	var ignore_detection = (
+		current_skill in root_motion_exceptions
+		or anim_locks["flinch"]
+		or anim_locks["knocked back"]
+		or anim_locks["knocked down"]
+		or anim_locks["dodge"]
+	)
+
+	if !ignore_detection:
+		for body in detection_area.get_overlapping_bodies():
+			if body != self and body.is_in_group("Entity"):
+				return
+
 	var motion:Transform = animation_tree.get_root_motion_transform()
 	var offset:Vector3 = motion.origin
 	offset.y = 0.0
+
 	if offset.length_squared() < 0.000001:
 		return
+
 	offset *= root_motion_scale
 	offset = player_mesh.global_transform.basis.xform(offset)
-	move_and_slide(Vector3(offset.x / delta, vertical_velocity.y, offset.z / delta),Vector3.UP)
 
-
-
+	move_and_slide(Vector3(offset.x / delta, vertical_velocity.y, offset.z / delta), Vector3.UP)
 
 func physics(delta):
-	if !is_in_water: vertical_velocity += Vector3.DOWN * gravity * delta
-	else: vertical_velocity.y = 0
-
 	if root_motion_active:
+		if !is_in_water:
+			vertical_velocity += Vector3.DOWN * gravity * delta
+		else:
+			vertical_velocity.y = 0
 		move_and_slide(vertical_velocity, Vector3.UP)
 		return
-
 	if is_dashing:
 		dash_time += delta
 		dash_timer -= delta
@@ -779,72 +975,111 @@ func physics(delta):
 			if dash_time >= 0.05:
 				dash_phase = 2
 				dash_time = 0.0
-		elif dash_phase == 2: dash_current_speed = lerp(dash_current_speed,dash_max_power,12.0 * delta)
-
+		elif dash_phase == 2:dash_current_speed = lerp(dash_current_speed,dash_max_power,12.0 * delta)
 		horizontal_velocity = dash_dir * dash_current_speed
-
 		if dash_timer <= 0.0:
 			is_dashing = false
 			dash_phase = 0
 			dash_turn_multiplier = 1.0
-	else:
-		horizontal_velocity = horizontal_velocity.linear_interpolate(direction.normalized() * movement_speed,acceleration * delta)
-
+	else:horizontal_velocity = horizontal_velocity.linear_interpolate(direction.normalized() * movement_speed,acceleration * delta)
+	movement.z = horizontal_velocity.z + vertical_velocity.z
 	movement.x = horizontal_velocity.x + vertical_velocity.x
 	movement.y = vertical_velocity.y
-	movement.z = horizontal_velocity.z + vertical_velocity.z
 	move_and_slide(movement, Vector3.UP)
-#func physics(delta):
-#	if root_motion_active:
-#		if !is_in_water:
-#			vertical_velocity += Vector3.DOWN * gravity * delta
-#		else:
-#			vertical_velocity.y = 0
-#		move_and_slide(vertical_velocity, Vector3.UP)
-#		return
-#
-#	if is_dashing:
-#		dash_time += delta
-#		dash_timer -= delta
-#		var dash_dir = direction.normalized()
-#		if dash_phase == 0:
-#			dash_current_speed = dash_start_speed
-#			if dash_time >= dash_start_delay:
-#				dash_phase = 1
-#				dash_time = 0.0
-#		elif dash_phase == 1:
-#			dash_current_speed = dash_start_speed
-#			if dash_time >= 0.05:
-#				dash_phase = 2
-#				dash_time = 0.0
-#		elif dash_phase == 2:dash_current_speed = lerp(dash_current_speed,dash_max_power,12.0 * delta)
-#		horizontal_velocity = dash_dir * dash_current_speed
-#		if dash_timer <= 0.0:
-#			is_dashing = false
-#			dash_phase = 0
-#			dash_turn_multiplier = 1.0
-#	else:horizontal_velocity = horizontal_velocity.linear_interpolate(direction.normalized() * movement_speed,acceleration * delta)
-#	movement.z = horizontal_velocity.z + vertical_velocity.z
-#	movement.x = horizontal_velocity.x + vertical_velocity.x
-#	movement.y = vertical_velocity.y
-#	move_and_slide(movement, Vector3.UP)
 
 
 
 
 
 
-func _physics_process(delta):
+
+var unstuckDistance = 15
+onready var dodge_check:Area = $Turnable/Cleave
+
+func dodgeMessage()->void:
+	var bodies = dodge_check.get_overlapping_bodies()
+	for body in bodies:
+		if body == self: continue
+		if !body.is_in_group("Entity"): continue
+
+		var skill_name = body.get("current_skill") if body.has_method("get") or "current_skill" in body else ""
+		if skill_name == "" or skill_name == "none" or !Skills.skills.has(skill_name) or Skills.support_skills.has(skill_name): continue
+		
+		var message = "dodged "
+		if "entity_name" in body and body.entity_name != "nameless":
+			message += body.entity_name
+		else:
+			message += body.species
+
+		message += " " + skill_name
+		chat.sendSystemMessage(message)
+					
+					
+onready var area_check_level_detector = $unstuckCheck
+
+func dodgeCollisions(_delta) -> void:
+	var is_dodge_skill = Skills.skill_dmg_immunity.has(current_skill)
+
+	if is_dodge_skill:
+		if current_skill != last_active_skill:
+			dodgeMessage()
+
+		anim_calls.disableCollisions()
+
+		var should_enable = true
+
+		for body in area_check_level_detector.get_overlapping_bodies():
+			if body == self:
+				continue
+
+			if body.is_in_group("Entity") and !body.is_in_group("Player"):
+				horizontal_velocity = direction.normalized() * stats.walk_speed
+				should_enable = false
+				break
+
+		if should_enable:
+			anim_calls.enableCollisions()
+
+		return
+
+	anim_calls.enableCollisions()
+
+
+
+func _physics_process(delta)->void:
+	dodgeCollisions(delta)
+
+	if current_skill=="mine" or current_skill=="chop" or current_skill=="gather":
+		if !chat.line_edit.has_focus():
+			if Input.is_action_pressed("forward") or Input.is_action_pressed("backward") or Input.is_action_pressed("left")or Input.is_action_pressed("right"):
+				current_skill=""
+				anim_calls.unlockAnim()
+
+
+
+	if stats.health <= 0:
+		skillbar.combo_queue = 0
+		skillbar.continue_combo_atk = false
+		anim_locks["combo attack"] = false
+		animation_tree.set("parameters/CombatSwitch/blend_amount",0)
+		animation_tree.set("parameters/IsAlive/blend_amount",0)
+	if anim_locks["guard react"] == true:
+		anim_locks["guard"] = false 
+
+
 	animationOrder()
 	safetyStuff()
-
+	forceMovementAnimUnlock()
 	if Input.is_action_just_pressed("unstuck"):
 		translation.x = 0
-		translation.y = 35
+		translation.y = -130.362
 		translation.z = 0
 		enableEntityCollisions()
+		stats.health += 100000
+		is_dead = false
+		is_downed = false
+		unlockAnim()
 	if Input.is_action_just_pressed("out_of_combat"):
-		inventory.saveData()
 		is_in_combat = !is_in_combat
 
 
@@ -861,25 +1096,27 @@ func _physics_process(delta):
 
 	if !movement_mode == "idle":
 		loot.closeLoot()
-	if Input.is_action_just_pressed("entity_debug"):
-		$UI/CrossairInspect/Debug.visible = !$UI/CrossairInspect/Debug.visible 
+		inventory.clearCart()
+		inventory.shop.hide()
+		if inventory.buy_button.visible == false:
+			inventory.restoreBrokerItems()
 	if Input.is_action_just_pressed("character"):
 		equipment.visible = !equipment.visible
-	if Engine.get_physics_frames() % 3 == 0:
+		inventory.shop.visible =false
+		$UI/SkillTreeRoot.visible =false
+		
+		
+		
+	if Engine.get_physics_frames() % 12 == 0:
 		equipment.updateEquipment()
 	if Engine.get_physics_frames() % 35 == 0:
 		if inventory.visible: if inventory.has_method("updateInventory"):inventory.updateInventory()
 	if Engine.get_physics_frames() % 60 == 0:
-
 		$UI/CrossairInspect.crossairInspect(self)
 		$UI/Menu/CharacterBar.updateBars()
-	if Engine.get_physics_frames() % 120 == 0:
-		equipment.updateEquipment()
 	if Engine.get_physics_frames() % 12000 == 0:
 		if not is_in_combat:
 			stored_body == null
-	var on_floor = is_on_floor() # State control for is jumping/falling/landing
-	
 	movement_speed = 0
 	acceleration = 15
 
@@ -918,7 +1155,14 @@ func clearMovementLocks()->void:
 	for lock_name in movement_unlock_locks:
 		if anim_locks.has(lock_name):
 			anim_locks[lock_name] = false
+
+var animation_almost_finished:bool = false
+var is_chatting:bool = false
 func movement(delta) -> void:
+	if stats.debuff_buffs_active.has("stunned") and float(stats.debuff_buffs_active["stunned"].get("duration",0.0)) > 0.0:
+		return
+	if is_chatting == true:
+		return 
 	# ==================================================
 	# TURN SPEED HANDLING (combat overrides)
 	# ==================================================
@@ -943,19 +1187,23 @@ func movement(delta) -> void:
 	# ==================================================
 	if can_move or !guarding:
 		if Input.is_action_pressed("left") and !is_climbing:
+			anim_locks["downed"] = false
 			if anim_locks["guard"] == false:
 				animation_tree.active = true
 				input_direction.x += 1
 		elif Input.is_action_pressed("right") and !is_climbing:
+			anim_locks["downed"] = false
 			if anim_locks["guard"] == false:
 				animation_tree.active = true
 				input_direction.x -= 1
 		if Input.is_action_pressed("forward"):
+			anim_locks["downed"] = false
 			if anim_locks["guard"] == false:
 				animation_tree.active = true
 				input_direction.z += 1
 			
 		elif Input.is_action_pressed("backward"):
+			anim_locks["downed"] = false
 			if anim_locks["guard"] == false:
 				animation_tree.active = true
 				input_direction.z -= 1
@@ -965,9 +1213,9 @@ func movement(delta) -> void:
 		if !Skills.canRotateDuringSkill(current_skill):
 			input_direction = Vector3.ZERO
 			movement_input = false
-	var crouching = Input.is_action_pressed("crouch")
+	var crouching = Input.is_action_pressed("crouch") and inventory.shop.visible == false
 	var sprinting = Input.is_action_pressed("sprint") and !crouching
-
+		
 	# ==================================================
 	# INPUT-BASED ANIM LOCK CLEAR (requested change)
 	# ==================================================
@@ -1012,19 +1260,19 @@ func movement(delta) -> void:
 			moving = true
 			if crouching:
 				movement_mode = "crouch_moving"
-				movement_speed = walk_speed * 0.5
+				movement_speed = stats.walk_speed * 0.5
 				is_in_combat = false
 				
 				animation_tree.active = true
 
 			elif sprinting and !is_in_water and stats.health >0:
-				movement_speed = stats.derived_stats["run_speed"]
+				movement_speed = stats.run_speed
 				movement_mode = "run"
 				animation_tree.active = true
 
 			else:
 				movement_mode = "walk"
-				movement_speed = walk_speed
+				movement_speed = stats.walk_speed
 
 				# leaving sprint triggers stop_run lock
 				if previous_movement_mode == "run":
@@ -1032,7 +1280,7 @@ func movement(delta) -> void:
 					#anim_locks["stop_run"] = true
 
 		else:
-			if crouching:
+			if crouching :
 				movement_mode = "crouch_idle"
 				animation_tree.active = true
 				is_in_combat = false
@@ -1080,18 +1328,34 @@ func movement(delta) -> void:
 	var can_rotate = true
 
 	if current_skill != "":
-		can_rotate = can_rotate and Skills.canRotateDuringSkill(current_skill)
+		can_rotate = Skills.skill_rotation_allowed.get(current_skill, false)
 
-	if can_rotate:
-		if !is_climbing and direction != Vector3.ZERO and (!is_on_wall()
-			or (climb_ray.is_colliding() and climb_ray.get_collider().is_in_group("Entity")
-			or left_ray.is_colliding() or right_ray.is_colliding())):
+	if is_instance_valid(player_mesh) and is_instance_valid(turnable):
+		if can_rotate:
+			for anim_name in anim_locks:
+				if anim_locks[anim_name] and !Skills.skill_rotation_allowed.get(anim_name,false):
+					can_rotate=false
+					break
 
-			var target_rot = atan2(direction.x, direction.z) - rotation.y
-			player_mesh.rotation.y = lerp_angle(player_mesh.rotation.y, target_rot, delta * angular_acceleration)
-			turnable.rotation.y = lerp_angle(turnable.rotation.y, target_rot, delta * angular_acceleration)
+			if anim_locks.has("guard") and anim_locks["guard"] or current_skill=="guard" or anim_locks.has("guard react") and anim_locks["guard react"] or current_skill=="guard react":
+				pass
+			elif can_rotate and !is_climbing and direction!=Vector3.ZERO:
+				var target_rot=atan2(direction.x,direction.z)-rotation.y
+				player_mesh.rotation.y=lerp_angle(player_mesh.rotation.y,target_rot,delta*angular_acceleration)
+				turnable.rotation.y=lerp_angle(turnable.rotation.y,target_rot,delta*angular_acceleration)
 
-
+func forceMovementAnimUnlock()->void:
+	if animation_almost_finished == true:
+		if Input.is_action_pressed("sprint"):
+			var has_lock = false
+			for lock_name in anim_locks:
+				if anim_locks[lock_name]:
+					has_lock = true
+			if has_lock == true:
+				anim_calls.unlockAnim()
+				animation_almost_finished = false
+			else:
+				animation_almost_finished = false
 
 
 
@@ -1170,7 +1434,10 @@ var stored_body_timer:int = 15
 
 onready var left_ray:RayCast = $Turnable/Left
 onready var right_ray:RayCast = $Turnable/Right
+var climbing_is_enabled:bool = false
 func climb() -> void:
+	if climbing_is_enabled == false:
+		return
 	is_climbing = false
 	var floor_hit = $RayCast.is_colliding()
 	var climb_hit = climb_ray.is_colliding()
@@ -1188,7 +1455,7 @@ func climb() -> void:
 				turnable.rotation.y = player_mesh.rotation.y
 				movement_mode = "vault"
 				is_airborne = false
-				horizontal_velocity = -wall_normal * walk_speed * stats.derived_stats["climb_speed"] 
+				horizontal_velocity = -wall_normal * stats.walk_speed * stats.derived_stats["climb_speed"] 
 				vertical_velocity = Vector3.UP * stats.derived_stats["climb_speed"] 
 				return
 		if is_on_wall() and climb_hit and head_hit and !left_hit and !right_hit and !is_on_floor():
@@ -1228,24 +1495,19 @@ func checkWallInclination()-> void:
 
 
 func jump()->void:
-	if stats.health >=1:
-		if cursor_visible == false:
-			if Input.is_action_just_pressed("jump") and is_on_floor():
-				vertical_velocity = Vector3.UP * stats.derived_stats["jump_power"]
-				unlockAnim()
-				is_in_combat = false
+	var has_lock = false
+	for lock_name in anim_locks:
+		if anim_locks[lock_name]:
+			has_lock = true
+			
+	if has_lock == false:
+		if stats.health >=1:
+			if cursor_visible == false:
+				if Input.is_action_just_pressed("jump") and is_on_floor():
+					vertical_velocity = Vector3.UP * stats.derived_stats["jump_power"]
+					is_in_combat = false
 
-				attacking = false
-				guarding =false
 
-
-func applyFallDamage(fall_distance: float):
-	if fall_distance < 3.0:
-		return
-	var damage = (fall_distance - 3.0) * 5.0
-	damage /= (1.0 + stats.derived_stats["fall_resistance"])
-	stats.getHit(self,{stats.damage_type.blunt: damage},false,0.0,false)
-	is_in_combat = false
 
 	
 var was_on_floor := true
@@ -1254,7 +1516,7 @@ var fall_start_y := 0.0
 var is_falling := false
 var highest_y:float = 0.0
 var is_airborne:bool= false
-export var safe_fall_speed := 12.0
+export var safe_fall_speed := 28.0
 export var fall_damage_multiplier := 2.0
 func checkFall():
 	if is_in_water == true:
@@ -1272,6 +1534,8 @@ func checkFall():
 	# Track highest point reached while is_airborne
 	if is_airborne:
 		highest_y = max(highest_y, global_transform.origin.y)
+		animation_tree.active = true
+		animation_tree.set("parameters/Vertical/blend_amount",1)
 	# Landed
 	if !was_on_floor and on_floor and is_airborne:
 		var landing_y = global_transform.origin.y
@@ -1281,7 +1545,15 @@ func checkFall():
 				applyFallDamage(fall_distance)
 		is_airborne = false
 	was_on_floor = on_floor
-
+onready var chat:Control = $UI/Chat
+func applyFallDamage(fall_distance: float):
+	if fall_distance < stats.derived_stats["jump_power"]:
+		return
+	var damage=int(max(0.0,round(((fall_distance-3.0)*2.0)/(1.0+stats.derived_stats["fall_resistance"])-stats.derived_stats["jump_power"])))
+	stats.health-=damage
+	is_in_combat=false
+	if damage>=1:
+		chat.sendSystemMessage(entity_name+" took "+str(damage)+" fall damage")
 
 var is_in_water:bool = false
 var water_areas := []
@@ -1295,36 +1567,32 @@ func isWaterArea(area)->bool:
 		node = node.get_parent()
 	return false
 
-func _on_WaterLevelChest_area_shape_entered(area_rid, area, area_shape_index, local_shape_index):
+func _on_WaterLevelChest_area_shape_entered(area_rid, area, area_shape_index,_local_shape_index):
 	if isWaterArea(area):
 		if !water_areas.has(area):
 			water_areas.append(area)
 		is_in_water = true
 		is_in_combat = false
+		stats.applyBuffDebuff("wrenched",self)
 
-func _on_WaterLevelChest_area_shape_exited(area_rid, area, area_shape_index, local_shape_index):
+func _on_WaterLevelChest_area_shape_exited(area_rid, area, area_shape_index,_local_shape_index):
 	if water_areas.has(area):
 		water_areas.erase(area)
 	is_in_water = water_areas.size() > 0
 onready var water_level_area:Area = $WaterLevelChest
-func buoyancy(delta)->void:
+func buoyancy(_delta)->void:
 	if !is_in_water:
 		return
-
 	var speed = stats.derived_stats["swim_speed"]
 	var surface_offset = 1.35
 	var can_go_up = false
-
 	for area in water_areas:
 		if !is_instance_valid(area):
 			continue
-
 		var water_y = area.global_transform.origin.y + surface_offset
-
 		if global_transform.origin.y < water_y:
 			can_go_up = true
 			break
-
 	if Input.is_action_pressed("crouch"):
 		vertical_velocity.y = -speed
 	elif Input.is_action_pressed("jump") and can_go_up:
@@ -1339,3 +1607,58 @@ func safetyStuff()->void:
 	if stats != null and !stats.statuses.has("stun"):
 		anim_locks["stunned"] = false
 		anim_locks["staggered"] = false
+
+
+
+var male_scene = null
+var female_scene = null
+func get_character_scene(male:bool)->PackedScene:
+	if male:
+		if !male_scene: male_scene = load("res://world/player/human/scenes/character_male.tscn")
+		return male_scene
+	if !female_scene: female_scene = load("res://world/player/human/scenes/character_female.tscn")
+	return female_scene
+
+func _on_SexChange_pressed():
+	var male=stats.sex=="female"
+	stats.sex="male" if male else "female"
+	$UI/Chat/SexChange.text=stats.sex
+	ApplySex()
+
+func ApplySex():
+	var packed_scene=get_character_scene(stats.sex=="male")
+	if !packed_scene: return
+
+	var old_character=$character
+	var previous_transform=Transform()
+
+	if is_instance_valid(old_character):
+		previous_transform=old_character.transform
+		old_character.get_parent().remove_child(old_character)
+		old_character.queue_free()
+
+	var new_character=packed_scene.instance()
+	new_character.name="character"
+	new_character.transform=previous_transform
+	add_child(new_character)
+	player_mesh=new_character
+
+	if animation_tree:
+		var animation_player=new_character.get_node_or_null("AnimationPlayer")
+		var root_bone=new_character.get_node_or_null("root/Skeleton/root")
+		if animation_player and animation_tree.has_method("set_animation_player"):
+			animation_tree.call("set_animation_player",animation_player.get_path())
+		elif animation_player:
+			animation_tree.set("anim_player",animation_player.get_path())
+		if root_bone:
+			animation_tree.set("root_motion_track",root_bone.get_path())
+
+	equipment.updateEquipment()
+	animation_tree.call_deferred("findAnimPlayer")
+	$character/root/Skeleton/Mesh.hide()
+	stats.applySpecies()
+	stats.resetAttributePoints()
+	
+	
+func _on_SexChange_mouse_entered():
+	 $UI/Chat/SexChange.text = stats.sex

@@ -1,10 +1,8 @@
 extends Node
 
-onready var parent=$".."
+onready var parent= $".."
 onready var animation=$"../character/AnimationPlayer"
-onready var tween=$Tween
-onready var timer=$Timer
-onready var dmg_area=$"../Area"
+
 onready var stats=$"../Stats"
 
 var combo_stage:int=0
@@ -12,6 +10,8 @@ var combo_playing:bool=false
 var can_comboB:bool=false
 var can_comboC:bool=false
 var locked:bool=false
+
+
 
 """
 combo_atk()->void stops the combo attack animation
@@ -29,11 +29,98 @@ func combo_atk()->void:
 
 
 
+func mine()->void:
+	var item_slot=$"../UI/Equipment/MainHand/Slot"
+	var inventory=parent.inventory
+	var inventory_grid=inventory.inventory_grid
+	var floating_text_parent=inventory.floating_text_parent
+	var mining_area:Area=$"../Turnable/Bash"
+	var stats=parent.stats
+	var mining_power:=1
+
+	for key in Items.weapons:
+		var icon=Items.weapons[key]["icon"]
+		var texture=load(icon) if typeof(icon)==TYPE_STRING else icon
+		if texture==item_slot.texture:
+			mining_power=Items.weapons[key].get("mining power",1)
+			break
+
+	var quantity:=max(1,randi()%mining_power+1)
+
+	for body in mining_area.get_overlapping_bodies():
+		var item_data=null
+		if body.is_in_group("rock") or body.is_in_group("Rock"):
+			item_data=Items.resources["stone"]
+		elif body.is_in_group("gold") or body.is_in_group("Gold"):
+			item_data=Items.resources["gold ore"]
+		elif body.is_in_group("iron") or body.is_in_group("Iron"):
+			item_data=Items.resources["iron ore"]
+		if item_data:
+			stats.getExperience(1)
+			CommonBehaviours.addStackableItem(inventory_grid,item_data,floating_text_parent,quantity)
+
+
+func chop()->void:
+	var item_slot=$"../UI/Equipment/MainHand/Slot"
+	var inventory=parent.inventory
+	var inventory_grid=inventory.inventory_grid
+	var floating_text_parent=inventory.floating_text_parent
+	var mining_area:Area=$"../Turnable/Bash"
+	var stats=parent.stats
+	var mining_power:=1
+
+	for key in Items.weapons:
+		var icon=Items.weapons[key]["icon"]
+		var texture=load(icon) if typeof(icon)==TYPE_STRING else icon
+		if texture==item_slot.texture:
+			mining_power=Items.weapons[key].get("chopping power",1)
+			break
+
+	var quantity:=max(1,randi()%mining_power+1)
+
+	for body in mining_area.get_overlapping_bodies():
+		var item_data=null
+		if body.is_in_group("tree") or body.is_in_group("Tree"):
+			item_data=Items.resources["wood log"]
+
+		if item_data:
+			stats.getExperience(1)
+			CommonBehaviours.addStackableItem(inventory_grid,item_data,floating_text_parent,quantity)
+
+
+
+
+
+
+
+
+
+
+
+
 func dealDMG()->void:
 	stats.dealDamage()
 
 func applyBuff()->void:
-	stats.selfBuff()
+	stats.applyBuffDebuff(parent.current_skill,get_parent())
+
+
+
+
+func animationStart():
+	get_parent().animation_almost_finished = false
+func animationAlmostFinished():
+	get_parent().animation_almost_finished = true
+
+
+
+
+
+
+
+
+
+
 
 var speed_up_combos = {
 	"stone splitter": false,
@@ -76,14 +163,18 @@ func enableCollisions()->void:
 
 func unlockAnim():
 	speed_up_combo_until.erase(parent.current_skill)
+	enableCollisions()
 	if parent.current_skill != "combo attack":
 		for key in parent.anim_locks:
 			parent.anim_locks[key] = false
 			parent.current_skill = "none"
 			parent.last_active_skill = ""
 			parent.animation_tree.active = false
-			stats.charged_attack_stacks["obliteration"]["stacks"] = 0 
-
+			if stats.has_method("resetChargedStacks"):
+				stats.resetChargedStacks()
+	if !parent.is_in_group("Player"):
+		parent.has_active_lock = false
+	
 
 
 
@@ -115,16 +206,9 @@ func connectUnlockAnimLastFrames():
 		anim.track_insert_key(
 			unlock_track,
 			anim.length,
-			{
-				"method":"unlockAnim",
-				"args":[]
-			}
-		)
+			{"method":"unlockAnim","args":[]})
 
-		ResourceSaver.save(
-			"%s%s.tres" % [save_path,anim_name],
-			anim
-		)
+		ResourceSaver.save("%s%s.tres" % [save_path,anim_name],anim)
 
 
 
@@ -150,10 +234,7 @@ func cleanCallTracks():
 			if anim.track_get_type(i) == Animation.TYPE_METHOD:
 				anim.remove_track(i)
 
-		ResourceSaver.save(
-			"%s%s.tres" % [save_path,anim_name],
-			anim
-		)
+		ResourceSaver.save("%s%s.tres" % [save_path,anim_name],anim)
 
 func loadAnimations():
 	var save_path = "res://world/player/human/animations/"

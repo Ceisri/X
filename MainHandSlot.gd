@@ -12,6 +12,9 @@ var max_quantity = 9999999999
 
 
 func get_drag_data(position:Vector2):
+	var player = $"../../.."
+	if player.current_skill == "mine" or player.current_skill == "harvest" or  player.current_skill == "gather" or  player.current_skill == "chop":
+		return null
 	if !icon or icon.texture==null:
 		return null
 
@@ -32,9 +35,30 @@ func get_drag_data(position:Vector2):
 	}
 
 
-func can_drop_data(p,d):return typeof(d)==TYPE_DICTIONARY and d.has("origin_texture") and d.has("origin_icon")
+func can_drop_data(position,data):
+	var player = $"../../.."
+	if player.current_skill == "mine" or player.current_skill == "harvest" or  player.current_skill == "gather" or  player.current_skill == "chop":
+		return false
+	if typeof(data)!=TYPE_DICTIONARY or !data.has("origin_texture") or !data.has("origin_icon"):
+		return false
+
+	var origin_texture=data["origin_texture"]
+
+	for weapon_name in Items.weapons:
+		var weapon=Items.weapons[weapon_name]
+		if CommonBehaviours.sameIcon(weapon["icon"],origin_texture):
+			if weapon.has("carry") and weapon["carry"]=="shield":
+				return false
+			return true
+
+	return false
+
+
 
 func drop_data(position,data):
+	var player = $"../../.."
+	if player.current_skill == "mine" or player.current_skill == "harvest" or  player.current_skill == "gather" or  player.current_skill == "chop":
+		return 
 	if typeof(data)!=TYPE_DICTIONARY:return
 
 	var origin_node=data.get("origin_node",null)

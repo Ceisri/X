@@ -5,7 +5,7 @@ var fade_duration:float = 0.3
 
 onready var health_label:Label = $Health
 onready var name_label:Label = $Name
-onready var rich_text_label = $Debug
+onready var rich_text_label =  $"../Chat/RichTextLabel3"
 onready var crossair = $"../Crossair"
 
 onready var stats:Node = $"../../Stats"
@@ -113,22 +113,67 @@ func _get_closest_non_player_body():
 	return best
 
 
+
 func entityInfo(body):
 	if body == null or !is_instance_valid(body):
 		return
+	var facing_text = ""
+	var direction_to_player = (player.global_transform.origin - body.global_transform.origin).normalized()
 
+	var facing_direction:Vector3
+	var direction_control = body.get_node_or_null("DirectionControl")
+
+	if direction_control:
+		facing_direction = direction_control.global_transform.basis.z.normalized()
+	else:
+		facing_direction = body.global_transform.basis.z.normalized()
+
+	var dot = -facing_direction.dot(direction_to_player)
+
+	if dot >= 0.7:
+		facing_text = "BEHIND"
+	elif dot >= 0.0:
+		facing_text = "FLANKING"
+	else:
+		facing_text = "FACING"
+
+	var creator_text="Creator: None\n"
+	if body.creator!=null and is_instance_valid(body.creator):
+		creator_text="Creator: "+body.creator.entity_name+"\n"
+
+	var spawned_text="Spawned Bodies:\n"
+	for spawned_body in body.spawned_bodies:
+		if !is_instance_valid(spawned_body):continue
+		spawned_text+="• "+spawned_body.entity_name+"\n"
+
+	rich_text_label.text=body.movement_mode+"\n"+\
+	facing_text+"\n"+\
+	body.current_skill+"\n"+\
+	"Pos: "+str(body.was_stuck_there.position)+"\n"+\
+	"Time: "+str(body.was_stuck_there.time)+"\n"+\
+	"Death: "+str(body.respawn_id)+"\n"+\
+	"Damage:\n"+body.stats.displayDMGMeter()+"\n"+\
+	str(body.entity_name)+"\n"+\
+	creator_text+\
+	spawned_text+\
+	str(body.animation_tree.get("parameters/Interraction/blend_amount"))+"\n"+\
+	str(body.animation_tree.get("parameters/IsAlive/blend_amount"))
+
+
+	body.displayAggro($"../Chat/RichTextLabel3")
+	body.displayAnimLocks($"../Chat/RichTextLabel3")
+	
+	
 	var hp = max(0, body.stats.health)
 	var ep = max(0, body.stats.energy)
 
 	stats.updateStatusGrid(stats.mob_status_grid, body.get_node("Stats"))
-
 	health_label.text = str(int(hp)) + "/" + str(int(body.stats.max_health))
 	energy_label.text = str(int(ep)) + "/" + str(int(body.stats.max_energy))
 
 	var s = ""
 	for k in body.stats.attributes:
 		s += str(k) + ":" + str(body.stats.attributes[k]) + "\n"
-	name_label.text = str(body.stats.Name) + "/\n" + s.trim_suffix("\n")
 
 	hp_bar.value = body.stats.health
 	ap_bar.value = body.stats.energy
@@ -139,46 +184,45 @@ func entityInfo(body):
 	crossair_inspect_tween.interpolate_property(hp_bar,"value",hp_bar.value,hp,0.3,Tween.TRANS_SINE,Tween.EASE_OUT)
 	crossair_inspect_tween.interpolate_property(ap_bar,"value",ap_bar.value,ep,0.3,Tween.TRANS_SINE,Tween.EASE_OUT)
 	crossair_inspect_tween.start()
-
+	$Name.text = body.stats.species + ": level "+ str(body.stats.level)
 	updateEnemySkills(body)
-
 	enemy_defenses_label.text = \
-	"Slash: " + str(body.stats.slash_defence) + "\n" + \
-	"Blunt: " + str(body.stats.blunt_defence) + "\n" + \
-	"Pierce: " + str(body.stats.pierce_defence) + "\n" + \
-	"Sonic: " + str(body.stats.sonic_defence) + "\n" + \
-	"Heat: " + str(body.stats.heat_defence) + "\n" + \
-	"Cold: " + str(body.stats.cold_defence) + "\n" + \
-	"Jolt: " + str(body.stats.jolt_defence) + "\n" + \
-	"Toxic: " + str(body.stats.toxic_defence) + "\n" + \
-	"Acid: " + str(body.stats.acid_defence) + "\n" + \
-	"Arcane: " + str(body.stats.arcane_defence) + "\n" + \
-	"Bleed: " + str(body.stats.bleed_defence) + "\n" + \
-	"Radiant: " + str(body.stats.radiant_defence)
-
+"Slash: " + str(stats.mitPercent(body.stats.slash_defence)) + "%  | ATK: " + str(body.stats.slash_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("slash",0.0) + body.stats.damage_flat_modifier.get("slash",0.0)) + "\n" + \
+"Blunt: " + str(stats.mitPercent(body.stats.blunt_defence)) + "%  | ATK: " + str(body.stats.blunt_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("blunt",0.0) + body.stats.damage_flat_modifier.get("blunt",0.0)) + "\n" + \
+"Pierce: " + str(stats.mitPercent(body.stats.pierce_defence)) + "%  | ATK: " + str(body.stats.pierce_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("pierce",0.0) + body.stats.damage_flat_modifier.get("pierce",0.0)) + "\n" + \
+"Sonic: " + str(stats.mitPercent(body.stats.sonic_defence)) + "%  | ATK: " + str(body.stats.sonic_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("sonic",0.0) + body.stats.damage_flat_modifier.get("sonic",0.0)) + "\n" + \
+"Heat: " + str(stats.mitPercent(body.stats.heat_defence)) + "%  | ATK: " + str(body.stats.heat_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("heat",0.0) + body.stats.damage_flat_modifier.get("heat",0.0)) + "\n" + \
+"Cold: " + str(stats.mitPercent(body.stats.cold_defence)) + "%  | ATK: " + str(body.stats.cold_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("cold",0.0) + body.stats.damage_flat_modifier.get("cold",0.0)) + "\n" + \
+"Jolt: " + str(stats.mitPercent(body.stats.jolt_defence)) + "%  | ATK: " + str(body.stats.jolt_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("jolt",0.0) + body.stats.damage_flat_modifier.get("jolt",0.0)) + "\n" + \
+"Toxic: " + str(stats.mitPercent(body.stats.toxic_defence)) + "%  | ATK: " + str(body.stats.toxic_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("toxic",0.0) + body.stats.damage_flat_modifier.get("toxic",0.0)) + "\n" + \
+"Acid: " + str(stats.mitPercent(body.stats.acid_defence)) + "%  | ATK: " + str(body.stats.acid_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("acid",0.0) + body.stats.damage_flat_modifier.get("acid",0.0)) + "\n" + \
+"Arcane: " + str(stats.mitPercent(body.stats.arcane_defence)) + "%  | ATK: " + str(body.stats.arcane_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("arcane",0.0) + body.stats.damage_flat_modifier.get("arcane",0.0)) + "\n" + \
+"Bleed: " + str(stats.mitPercent(body.stats.bleed_defence)) + "%  | ATK: " + str(body.stats.bleed_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("bleed",0.0) + body.stats.damage_flat_modifier.get("bleed",0.0)) + "\n" + \
+"Radiant: " + str(stats.mitPercent(body.stats.radiant_defence)) + "%  | ATK: " + str(body.stats.radiant_multiplier * 100.0) + "%  | Flat: " + str(body.stats.flat_damage_bonus.get("radiant",0.0) + body.stats.damage_flat_modifier.get("radiant",0.0))
+	
 
 func updateEnemySkills(body):
 	for child in enemy_skill_grid.get_children():
 		if child != skill_template:
 			child.queue_free()
-
 	skill_template.visible = false
-
-	var skills = MobSkills.getSpeciesSkills(body.stats.species)
-
-	for i in range(skills.size()):
-		var skill = skills[i]
-
+	var skills_list = Skills.getSpeciesSkills(body.stats.species)
+	for i in range(skills_list.size()):
+		var skill_name = skills_list[i]
+		if !Skills.skills.has(skill_name):
+			continue
 		var icon = skill_template.duplicate()
 		icon.visible = true
-		icon.texture = load(MobSkills.getSkillPath(skill))
-
+		icon.texture = Skills.skills[skill_name]
 		var label = icon.get_node("Label")
+		var cd_path = Skills.skills[skill_name].resource_path
 
-		if body.combat.active_cooldowns.has(skill):
-			label.text = str(int(ceil(body.combat.active_cooldowns[skill])))
-			label.visible = true
+		if body != null and body.has_method("get") and "skill_cooldowns" in body and body.skill_cooldowns != null:
+			if body.skill_cooldowns.has(cd_path):
+				label.text = str(int(ceil(body.skill_cooldowns[cd_path])))
+				label.visible = true
+			else:
+				label.visible = false
 		else:
 			label.visible = false
-
 		enemy_skill_grid.add_child(icon)

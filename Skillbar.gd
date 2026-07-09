@@ -22,7 +22,6 @@ var mouse_repeat_counter={}
 
 var no_press_tween_skills=["combo attack","guard"]
 var hold_skills={
-	"parry":true,
 	"guard":true,
 	"combo attack":true,
 	"obliteration charge":true,
@@ -104,16 +103,47 @@ func resetSkillRuntime():#initialization to prevent bugs where multiple inputs a
 		player.anim_locks[k] = false
 
 func consumeCombo():#called by the node AnimationCalls in animation call tracks for combo attack animations, enables queuing multiple base attacks 
-	if combo_queue > 0:
-		continue_combo_atk = true
-		combo_queue -= 1
-		
+	if stats.health <= 0:
+		continue_combo_atk=false
+		combo_queue=0
+	if combo_queue>0:
+		if !player.anim_locks["flinch"] and !player.anim_locks["knocked back"] and !player.anim_locks["knocked down"]:
+			continue_combo_atk=true
+			combo_queue-=1
+	elif combo_atk_mode_hold:
+		var combo_held=false
+
+		for i in range(grid.get_child_count()):
+			var slot=grid.get_child(i).get_node("Slot")
+			if slot.texture==Skills.skills["combo attack"] and Input.is_action_pressed(ACTION_PREFIX+str(i)):
+				combo_held=true
+				break
+
+		if !combo_held:
+			for i in range(grid2.get_child_count()):
+				var slot=grid2.get_child(i).get_node("Slot")
+				if slot.texture==Skills.skills["combo attack"] and Input.is_action_pressed(ACTION_PREFIX2+str(i)):
+					combo_held=true
+					break
+
+		if combo_held and !player.anim_locks["flinch"] and !player.anim_locks["knocked back"] and !player.anim_locks["knocked down"]:
+			continue_combo_atk=true
+			
 
 
 var input_lock_time := 0.0
 var input_lock := false
 func _physics_process(delta):
 	updateCooldowns(delta)
+	updateSkillAvailabilityVisuals()
+	if player.anim_locks["downed"] or player.anim_locks["flinch"] or player.anim_locks["knocked back"] or player.anim_locks["knocked down"]:
+		continue_combo_atk=false
+		combo_queue=0
+		player.anim_locks["combo attack"]=false
+		if player.current_skill=="combo attack":
+			player.current_skill=""
+			
+			
 	input_lock_time -= delta
 	if input_lock_time <= 0:
 		input_lock = false
@@ -136,11 +166,42 @@ but for players who want press-to-attack instead of hold-to-attack, this is requ
 Call this at the end of every hit in the combo attack animation, during the recovery frames.
 """
 func holdInputs()->void:
+	if stats.health <= 0:
+		continue_combo_atk=false
+		combo_queue=0
+		return
+	var guard_held=false
+
+	for i in range(grid.get_child_count()):
+		var slot=grid.get_child(i).get_node("Slot")
+		if slot.texture==Skills.skills["guard"] and Input.is_action_pressed(ACTION_PREFIX+str(i)):
+			guard_held=true
+			break
+
+	if !guard_held:
+		for i in range(grid2.get_child_count()):
+			var slot=grid2.get_child(i).get_node("Slot")
+			if slot.texture==Skills.skills["guard"] and Input.is_action_pressed(ACTION_PREFIX2+str(i)):
+				guard_held=true
+				break
+
+	if guard_held and !player.anim_locks["guard"]:
+		var blocked=false
+		for lock_name in player.anim_locks:
+			if lock_name!="guard" and player.anim_locks[lock_name]:
+				blocked=true
+				break
+
+		if !blocked:
+			player.anim_locks["guard"]=true
+			player.current_skill="guard"
+
 	for skill in hold_skills.keys():
 		if player.anim_locks.has(skill) and player.anim_locks[skill]:
 #__________________press to atk vs hold to atk for the base attack__________________________________
 			if skill=="combo attack" and combo_atk_mode_hold==false:
-				player.is_in_combat=true
+				if player.anim_locks["flinch"] == false or player.anim_locks["knocked back"] == false or player.anim_locks["knocked down"] == false:
+					player.is_in_combat=true
 				
 				if continue_combo_atk:
 					continue
@@ -187,6 +248,7 @@ func holdInputs()->void:
 		for i in range(grid.get_child_count()):
 			var slot=grid.get_child(i).get_node("Slot")
 			if slot.texture==Skills.skills["combo attack"] and Input.is_action_pressed(ACTION_PREFIX+str(i)):
+				
 				skills(slot)
 				return
 
@@ -213,10 +275,7 @@ func updateChargeSkillColor(skill_name,max_stacks,color_points):
 	if !Skills.skills.has(skill_name):return
 
 	if !chargeSkillColors.has(skill_name):
-		chargeSkillColors[skill_name]={
-			"color":Color.white,
-			"slots":[]
-		}
+		chargeSkillColors[skill_name]={"color":Color.white,"slots":[]}
 	var data=chargeSkillColors[skill_name]
 
 	if data.slots.empty():
@@ -344,15 +403,64 @@ func getSkillData(slot):
 		"slot": slot
 	}
 
+
 func skills(slot)->void:
-	if player.is_dead == true:
+	var inventory_grid:GridContainer = $"../Inventory/ScrollContainer/GridContainer"
+	var slot_mainhand:TextureRect = $"../Equipment/MainHand/Slot"
+	if player.is_chatting == true:
+		return 
+	if stats.health <=0:
 		return
-	if player.is_downed == true:
+	if player.anim_locks["flinch"] == true or player.anim_locks["knocked back"] == true or player.anim_locks["knocked down"] == true or player.anim_locks["guard react"] == true:
 		return
 	var data=getSkillData(slot)
 	var skill_name
 	if data != null:
 		skill_name=data.skill_name
+
+	var weapon_mode = player.weapons
+
+	if skill_name == null:
+		return
+
+	if !player.skill_animations.has(skill_name):
+		return
+	var anims = player.skill_animations[skill_name]
+
+	if anims.has(weapon_mode):
+		pass
+	elif anims.has(player.WeaponMode.NONE):
+		weapon_mode = player.WeaponMode.NONE
+	else:
+		return
+		
+	if skill_name=="chop" or skill_name=="mine":
+		var required= "chopping power" if skill_name=="chop" else "mining power"
+		var has_tool=false
+
+		for key in Items.weapons:
+			var weapon=Items.weapons[key]
+			if weapon.has(required):
+				var icon=weapon["icon"]
+				if typeof(icon)==TYPE_STRING:
+					icon=load(icon)
+
+				if slot_mainhand.texture==icon:
+					has_tool=true
+					break
+
+				for child in inventory_grid.get_children():
+					var slot_icon=child.get_node_or_null("Slot")
+					if slot_icon and slot_icon.texture==icon:
+						has_tool=true
+						break
+
+			if has_tool:
+				break
+
+		if !has_tool:
+			return
+		
 	if skill_name == "guard":
 		anim_calls.unlockAnim()
 		player.anim_locks["guard"] = true
@@ -368,6 +476,8 @@ func skills(slot)->void:
 		for lock_name in player.anim_locks:
 			if lock_name!="combo attack" and player.anim_locks[lock_name]:
 				return
+				
+				
 	var is_exempt=is_combo or skill_name=="guard" or skill_name=="parry"
 
 
@@ -380,36 +490,27 @@ func skills(slot)->void:
 			is_skill=true
 			break
 
-	useItemFromKeyboard(is_skill,slot,path)
-
 	if !is_hold and !is_exempt and active_cooldowns.has(path):
 		return
 
-	var texture=Skills.skills[skill_name]
+	var unlocked = skill_name in ["combo attack","guard","evasion","parry","backstep","penetrating blow"]
+	if !unlocked:
+		var texture = Skills.skills[skill_name]
+		var roots = [$"../SkillTreeRoot/BasicSkils"]
+		for holder_index in range(16):
+			roots.append($"../SkillTreeRoot".get_node("SkillsTreeHolder"+str(holder_index+1)+"/Control"))
+		for root in roots:
+			var stack = [root]
+			while stack.size() > 0 and !unlocked:
+				var node = stack.pop_back()
+				for child in node.get_children():
+					stack.append(child)
+					if child is TextureButton and child.has_node("Slot") and child.skill_level > 0 and child.get_node("Slot").texture == texture:
+						unlocked = true
+						break
+	if !unlocked:
+		return
 
-	var unlocked:=false
-	var stack=[$"../SkillTreeRoot"]
-
-	while stack.size()>0:
-		var node=stack.pop_back()
-		for child in node.get_children():
-			stack.append(child)
-			if !(child is TextureButton): continue
-			if !child.has_node("Slot"): continue
-			var has_skill_level:=false
-			for prop in child.get_property_list():
-				if prop.name=="skill_level":
-					has_skill_level=true
-					break
-			if !has_skill_level: continue
-
-			var slot_node=child.get_node("Slot")
-			if slot_node.texture==texture and child.skill_level>0:
-				unlocked=true
-				break
-		if unlocked: break
-
-	if !unlocked: return
 
 	if !is_hold:
 		if player.anim_locks.get(skill_name,false): return
@@ -418,10 +519,18 @@ func skills(slot)->void:
 		if stats.energy<energy_cost: return
 
 	if is_combo:
-		if combo_atk_mode_hold: continue_combo_atk=true
-		else: continue_combo_atk=true
+		if player.anim_locks["flinch"] == false or player.anim_locks["knocked back"] == false or player.anim_locks["knocked down"] == false:
+			if combo_atk_mode_hold: continue_combo_atk=true
+			else: continue_combo_atk=true
+		else:
+			continue_combo_atk= false
+			combo_queue = 0 
 
+	player.current_skill = skill_name
 	delayedSkill(skill_name,path,energy_cost,slot)
+	
+	if skill_name == "aegis":
+		inventory.switchDefensiveStanceWeapons()
 	
 	
 var skill_delay_busy:=false
@@ -488,46 +597,10 @@ func reimburseSkill(skill_name:String)->void:
 		active_cooldowns.erase(path)
 
 
-func useItemFromKeyboard(is_skill,slot,path)->void:
-	if !is_skill:
-		var holder = slot.get_parent()
-		var button = holder.get_node("TextureButton")
-
-		if active_cooldowns.has(path):
-			return
-
-		tween.stop_all()
-
-		tween.interpolate_property(slot, "rect_scale",Vector2.ONE, Vector2(0.9, 0.9),0.08, Tween.TRANS_QUAD, Tween.EASE_OUT)
-
-		tween.interpolate_property(slot, "rect_scale",Vector2(0.9, 0.9), Vector2.ONE,0.08, Tween.TRANS_QUAD, Tween.EASE_IN, 0.08)
-
-		if button.quantity <= 0:
-			tween.interpolate_property(slot, "modulate",Color.white, Color(1, 0, 0),0.08, Tween.TRANS_QUAD, Tween.EASE_OUT)
-
-			tween.interpolate_property(slot, "modulate",Color(1, 0, 0), Color.white,0.15, Tween.TRANS_QUAD, Tween.EASE_IN, 0.08)
-
-			tween.start()
-			return
-
-		tween.interpolate_property(slot, "modulate",Color.white, Color(0, 1, 0),0.08, Tween.TRANS_QUAD, Tween.EASE_OUT)
-
-		tween.interpolate_property(slot, "modulate",Color(0, 1, 0), Color.white,0.15, Tween.TRANS_QUAD, Tween.EASE_IN, 0.08)
-
-		tween.start()
-
-		if CommonBehaviours.useItem(button, inventory_grid, stats):
-			var cooldown = Items.getCooldown(path)
-
-			if cooldown > 0.0:
-				active_cooldowns[path] = cooldown
-
-			button.quantity -= 1
-
-			if button.quantity <= 0:
-				button.quantity = 0
-				slot.texture = null
-				button.item = "null"
+				
+				
+				
+				
 func tweenSkillIcons(skill_name,slot)->void:
 	if !no_press_tween_skills.has(skill_name):
 		tween.stop_all()
@@ -535,33 +608,87 @@ func tweenSkillIcons(skill_name,slot)->void:
 		tween.interpolate_property(slot, "rect_scale",Vector2(0.9, 0.9), Vector2.ONE,0.08, Tween.TRANS_QUAD, Tween.EASE_IN, 0.08)
 		tween.start()
 
-func resetTween(slot)->void:
-	if slot.texture == null:
-		return
-
-	var path = slot.texture.resource_path
-
-	# no cooldown defined or explicitly zero -> ignore
-	if !Skills.cooldowns.has(path):
-		return
-	if Skills.cooldowns[path] <= 0.0:
-		return
-
-	var t:Tween = tween2
-	t.stop_all()
-	slot.modulate = Color.white
-
-	t.interpolate_property(slot,"modulate",Color.white,Color(0.5,0.8,1.4,1),0.12,Tween.TRANS_QUAD,Tween.EASE_OUT)
-	t.interpolate_property(slot,"modulate",Color(0.5,0.8,1.4,1),Color.white,0.20,Tween.TRANS_QUAD,Tween.EASE_IN,0.12)
-
-	t.start()
 
 
-func updateCooldowns(delta):# I suspect this funciton is called twice somewhere and I can't find where, momentary solution, divide delta by 2 
+func useItem(slot)->bool:
+	if stats.health<=0:return false
+	if slot==null or slot.texture==null:return false
+
+	var holder=slot.get_parent()
+	var button=holder.get_node("TextureButton")
+	var path=slot.texture.resource_path
+
+	if !Items.cooldowns.has(path):return false
+	if active_cooldowns.has(path):return true
+
+	tween.stop_all()
+	tween.interpolate_property(slot,"rect_scale",Vector2.ONE,Vector2(0.9,0.9),0.08,Tween.TRANS_QUAD,Tween.EASE_OUT)
+	tween.interpolate_property(slot,"rect_scale",Vector2(0.9,0.9),Vector2.ONE,0.08,Tween.TRANS_QUAD,Tween.EASE_IN,0.08)
+
+	if button.quantity<=0:
+		tween.interpolate_property(slot,"modulate",Color.white,Color(1,0,0),0.08,Tween.TRANS_QUAD,Tween.EASE_OUT)
+		tween.interpolate_property(slot,"modulate",Color(1,0,0),Color.white,0.15,Tween.TRANS_QUAD,Tween.EASE_IN,0.08)
+		tween.start()
+		return true
+
+	tween.interpolate_property(slot,"modulate",Color.white,Color(0,1,0),0.08,Tween.TRANS_QUAD,Tween.EASE_OUT)
+	tween.interpolate_property(slot,"modulate",Color(0,1,0),Color.white,0.15,Tween.TRANS_QUAD,Tween.EASE_IN,0.08)
+	tween.start()
+
+	if CommonBehaviours.useItem(button,inventory_grid,stats):
+		var cooldown=Items.getCooldown(path)
+		if cooldown>0.0:
+			active_cooldowns[path]=cooldown
+
+		button.quantity-=1
+
+		if button.quantity<=0:
+			button.quantity=0
+			slot.texture=null
+			button.item="null"
+
+	return true
+	
+	
+func updateSkillAvailabilityVisuals():
+	var weapon_mode=player.weapons
+	for container in [grid,grid2]:
+		for holder in container.get_children():
+			var icon=holder.get_node("Slot")
+			if !icon.texture:
+				continue
+
+			var skill_name=""
+			for s in Skills.skills:
+				if Skills.skills[s]==icon.texture:
+					skill_name=s
+					break
+
+			if skill_name=="":
+				icon.modulate=Color(1,1,1,1)
+				continue
+
+			if !player.skill_animations.has(skill_name):
+				icon.modulate=Color(1,1,1,1)
+				continue
+
+			var anims=player.skill_animations[skill_name]
+
+			if anims.has(weapon_mode):
+				icon.modulate=Color(1,1,1,1)
+				continue
+
+			if anims.has(player.WeaponMode.NONE):
+				icon.modulate=Color(1,1,1,1)
+				continue
+
+			icon.modulate=Color(0.4,0.4,0.4,1)
+func updateCooldowns(delta):
 	for key in active_cooldowns.keys():
-		active_cooldowns[key]=max(active_cooldowns[key]-delta *0.5 ,0.0)
+		active_cooldowns[key]=max(active_cooldowns[key]-delta*0.5,0.0)
 
 	inventory.inventoryCooldowns(delta)
+
 	for container in [grid,grid2]:
 		for holder in container.get_children():
 			var icon=holder.get_node("Slot")
@@ -578,13 +705,9 @@ func updateCooldowns(delta):# I suspect this funciton is called twice somewhere 
 				label.text=str(stacks)
 				continue
 
-			var has_skill_cd=Skills.cooldowns.has(key) and Skills.cooldowns[key]>0.0
+			var has_cd=(Skills.cooldowns.has(key) and Skills.cooldowns[key]>0.0) or (Items.cooldowns.has(key) and Items.cooldowns[key]>0.0)
 
-			if !has_skill_cd:
-				label.text=""
-				continue
-
-			if !active_cooldowns.has(key):
+			if !has_cd or !active_cooldowns.has(key):
 				label.text=""
 				continue
 
@@ -602,7 +725,9 @@ func updateCooldowns(delta):# I suspect this funciton is called twice somewhere 
 			continue
 
 		var key=icon.texture.resource_path
-		if !active_cooldowns.has(key):
+		var has_cd=(Skills.cooldowns.has(key) and Skills.cooldowns[key]>0.0) or (Items.cooldowns.has(key) and Items.cooldowns[key]>0.0)
+
+		if !has_cd or !active_cooldowns.has(key):
 			label.text=""
 			continue
 
@@ -610,7 +735,6 @@ func updateCooldowns(delta):# I suspect this funciton is called twice somewhere 
 		label.text=str(int(ceil(max(t,0))))
 		if t<=0:
 			active_cooldowns.erase(key)
-
 
 func matchInputSlot()->void:
 	for i in range(grid.get_child_count()):
@@ -622,6 +746,7 @@ func matchInputSlot()->void:
 					player.is_in_combat=true
 					combo_queue = min(combo_queue + 1, COMBO_QUEUE_MAX)
 			skills(slot)
+			useItem(slot)
 			return
 
 	for i in range(grid2.get_child_count()):
@@ -633,6 +758,7 @@ func matchInputSlot()->void:
 					player.is_in_combat=true
 					combo_queue = min(combo_queue + 1, COMBO_QUEUE_MAX)
 			skills(slot)
+			useItem(slot)
 			return
 
 
@@ -966,19 +1092,20 @@ func expandCollapse()->void:
 	applyExpandState()
 	saveKeybinds()
 func connectButtons()->void:
-	for holder in grid.get_children():
-		for c in holder.get_children():
-			if c is TextureButton:
-				c.connect("pressed",self,"slotPressed",[holder])
+	for slotHolder in grid.get_children():
+		for slotButton in slotHolder.get_children():
+			if slotButton is TextureButton and !slotButton.is_connected("pressed",self,"slotPressed"):
+				slotButton.connect("pressed",self,"slotPressed",[slotHolder])
 				break
 
-	for holder in grid2.get_children():
-		for c in holder.get_children():
-			if c is TextureButton:
-				c.connect("pressed",self,"slotPressed",[holder])
+	for slotHolder in grid2.get_children():
+		for slotButton in slotHolder.get_children():
+			if slotButton is TextureButton and !slotButton.is_connected("pressed",self,"slotPressed"):
+				slotButton.connect("pressed",self,"slotPressed",[slotHolder])
 				break
 
-	expand_button.connect("pressed",self,"expandCollapse")
+	if !expand_button.is_connected("pressed",self,"expandCollapse"):
+		expand_button.connect("pressed",self,"expandCollapse")
 	
 func applyExpandState()->void:
 	for i in range(20):

@@ -32,7 +32,19 @@ func get_drag_data(position:Vector2):
 	}
 
 
-func can_drop_data(p,d):return typeof(d)==TYPE_DICTIONARY and d.has("origin_texture") and d.has("origin_icon")
+func can_drop_data(position,data):
+	if typeof(data)!=TYPE_DICTIONARY or !data.has("origin_texture") or !data.has("origin_icon"):
+		return false
+
+	var origin_texture=data["origin_texture"]
+
+	for armor_name in Items.armors:
+		var armor=Items.armors[armor_name]
+		if CommonBehaviours.sameIcon(armor["icon"],origin_texture):
+			return armor.has("type") and armor["type"]=="feet"
+
+	return false
+
 
 func drop_data(position,data):
 	if typeof(data)!=TYPE_DICTIONARY:return
