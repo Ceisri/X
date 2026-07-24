@@ -14,7 +14,7 @@ const BERSERK_COMBO_ANIMS = [
 
 func _ready():
 	addUnlockAnimCalls()
-	#addInvincibilityFrames()
+	addInvincibilityFrames()
 	addBerserkComboCalls()
 
 
@@ -48,7 +48,8 @@ func addUnlockAnimCalls():
 
 
 func addInvincibilityFrames()->void:
-	var animation_calls=$"../../AnimationCalls"
+	var animation_calls= $"../../AnimationCalls"
+	if !animation_calls: return
 	for animation_name in get_animation_list():
 		var lower_name=animation_name.to_lower()
 		if !("evasion" in lower_name or "backstep" in lower_name or "dodge" in lower_name or "avoid" in lower_name or "iframe" in lower_name):

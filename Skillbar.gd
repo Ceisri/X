@@ -51,7 +51,7 @@ func initializeSkillsToPreventAstupidFuckingBugIDontKnowHowToFix()->void:
 		return
 
 	var saved_cooldowns = {}
-	var save_path = "user://save/" + player.save_id + "/skill_cooldowns.save"
+	var save_path = "user://save/" + player.entity_name + "/skill_cooldowns.save"
 	var file = File.new()
 	if file.file_exists(save_path):
 		if file.open(save_path,File.READ) == OK:
@@ -433,7 +433,7 @@ func skills(slot)->void:
 		weapon_mode = player.WeaponMode.NONE
 	else:
 		return
-		
+	if skill_name=="gather":player.is_in_combat = false
 	if skill_name=="chop" or skill_name=="mine":
 		var required= "chopping power" if skill_name=="chop" else "mining power"
 		var has_tool=false
@@ -597,10 +597,36 @@ func reimburseSkill(skill_name:String)->void:
 		active_cooldowns.erase(path)
 
 
-				
-				
-				
-				
+func castSkill(skill_name:String)->void:
+	var weapon_mode=player.weapons
+	var anims=player.skill_animations[skill_name]
+
+	if !anims.has(weapon_mode):
+		weapon_mode=player.WeaponMode.NONE
+
+	var path=Skills.skills[skill_name].resource_path
+	var energy_cost=Skills.getEnergyCost(skill_name)
+
+	player.animation_tree.active=true
+	player.current_skill=skill_name
+	player.anim_locks[skill_name]=true
+	player.is_in_combat=true
+
+	var cooldown=Skills.getCooldown(path)
+	cooldown/=max(0.01,stats.derived_stats["cooldown_reduction"])
+
+	active_cooldowns[path]=cooldown
+	Skills.applyCooldownEffects(skill_name,active_cooldowns)
+
+	if energy_cost>0:
+		stats.energy-=energy_cost
+		character_ui.updateBars()
+
+
+
+
+
+
 func tweenSkillIcons(skill_name,slot)->void:
 	if !no_press_tween_skills.has(skill_name):
 		tween.stop_all()
@@ -609,10 +635,24 @@ func tweenSkillIcons(skill_name,slot)->void:
 		tween.start()
 
 
-
 func useItem(slot)->bool:
 	if stats.health<=0:return false
 	if slot==null or slot.texture==null:return false
+
+	for resource_name in Items.resources:
+		var resource=Items.resources[resource_name]
+		if resource_name=="crafting book" and CommonBehaviours.sameIcon(resource["icon"],slot.texture):
+			tween.stop_all()
+			tween.interpolate_property(slot,"rect_scale",Vector2.ONE,Vector2(0.9,0.9),0.08,Tween.TRANS_QUAD,Tween.EASE_OUT)
+			tween.interpolate_property(slot,"rect_scale",Vector2(0.9,0.9),Vector2.ONE,0.08,Tween.TRANS_QUAD,Tween.EASE_IN,0.08)
+			tween.start()
+
+			var recipes_book:Control=$"../Crafting/RecipeeBook"
+			recipes_book.visible=!recipes_book.visible
+			inventory.visible=recipes_book.visible
+			player.crafting.visible=recipes_book.visible
+			return true
+
 
 	var holder=slot.get_parent()
 	var button=holder.get_node("TextureButton")
@@ -894,9 +934,9 @@ func loadKeybinds()->void:
 	# --------------------------------------------------
 	var has_character_save := false
 
-	if player.save_id != "":
+	if player.entity_name != "":
 		var dir = Directory.new()
-		var save_dir = "user://save/" + player.save_id
+		var save_dir = "user://save/" + player.entity_name
 
 		if dir.dir_exists(save_dir):
 			has_character_save = true
@@ -998,18 +1038,18 @@ func getSlotIndex(slot)->int:
 			return i
 	return -1
 func saveData()->void:
-	var savePath = "user://save/" + player.save_id + "/skill_cooldowns.save"
+	var savePath = "user://save/" + player.entity_name + "/skill_cooldowns.save"
 	var dir = Directory.new()
 	if !dir.dir_exists("user://save"):
 		dir.make_dir("user://save")
-	if !dir.dir_exists("user://save/" + player.save_id):
-		dir.make_dir("user://save/" + player.save_id)
+	if !dir.dir_exists("user://save/" + player.entity_name):
+		dir.make_dir("user://save/" + player.entity_name)
 	var file = File.new()
 	if file.open(savePath,File.WRITE) == OK:
 		file.store_var(active_cooldowns)
 		file.close()
 func loadCooldowns()->void:
-	var savePath = "user://save/" + player.save_id + "/skill_cooldowns.save"
+	var savePath = "user://save/" + player.entity_name + "/skill_cooldowns.save"
 	var file = File.new()
 	if file.file_exists(savePath):
 		if file.open(savePath,File.READ) == OK:

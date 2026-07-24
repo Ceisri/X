@@ -5,6 +5,8 @@ onready var anim_calls = $AnimationCalls
 onready var character = $character
 onready var equipment =$UI/Equipment
 onready var skeleton = $character/root/Skeleton
+
+
 onready var stats =$Stats
 onready var camroot = $Camroot
 onready var camera_v = $Camroot/h/v
@@ -14,9 +16,12 @@ onready var loot = $UI/Loot
 onready var inventory = $UI/Inventory
 onready var turnable:Spatial = $Turnable
 
-var save_id = "Player"
+
 var respawn_id:int = 0
-var entity_name = "Kairos"
+var entity_name = Global.selected_player_name
+export var sex:String = "female"
+var creator
+var spawned_bodies
 export var gravity = 9.8 
 # Physics values
 var direction = Vector3()
@@ -54,9 +59,20 @@ enum WeaponMode {
 	SHIELD,
 	TWO_HANDED
 }
+var which_portal = ""
+var which_scene = ""
 func _ready():
-	ApplySex()
-	
+	match which_portal:
+		"mines":
+			translation.x = -5.243
+			translation.y = 1.101
+			translation.z = 13.625
+		"world":
+			translation.x = 22.5
+			translation.y = -16.349
+			translation.z = 41.371
+	entity_name = Global.selected_player_name
+	$UI/Crafting/Smelting.hide()
 	$character/root/Skeleton/Mesh.hide()
 	equipment.updateEquipment()
 	for child in $UI/Skillbar/GridContainer.get_children():
@@ -65,10 +81,20 @@ func _ready():
 		child.get_node("Slot").loadData()
 	direction=Vector3.BACK.rotated(Vector3.UP,$Camroot/h.global_transform.basis.get_euler().y)
 	initializeAnimationBlends()
-
+	call_deferred("loadData")
+	loadCharacterData()
+	ApplySex()
+	yield(get_tree(),"idle_frame")
+	yield(get_tree(),"idle_frame")
+	call_deferred("loadBoneData")
+	_updateInputKeys()
+	_cacheToolIcons()
+	disableFallDamage()
+	water_level_area.connect("area_shape_entered", self, "enterDeepWaters")
+	water_level_area.connect("area_shape_exited", self, "exitDeepWaters")
 
 var weapons:int = WeaponMode.NONE
-var skill_start_time:int = 0
+
 var current_skill:String = "none"
 var anim_locks = { 
 	"combo attack":false,
@@ -144,6 +170,15 @@ var skill_animations = {
 		WeaponMode.SHIELD:"chop_cycle",
 		WeaponMode.TWO_HANDED:"chop_cycle",
 	},
+	"gather":{
+		WeaponMode.NONE:"gather",
+		WeaponMode.SWORD:"gather",
+		WeaponMode.DUAL:"gather",
+		WeaponMode.SHIELD:"gather",
+		WeaponMode.TWO_HANDED:"gather",
+	},
+	
+	
 	"combo attack":{
 		WeaponMode.NONE:"ComboATK_Empty_cycle",
 		WeaponMode.SWORD:"ComboATK_OneHanded_cycle",
@@ -941,6 +976,8 @@ func rootMotion(delta)->void:
 			if body != self and body.is_in_group("Entity"):
 				return
 
+
+
 	var motion:Transform = animation_tree.get_root_motion_transform()
 	var offset:Vector3 = motion.origin
 	offset.y = 0.0
@@ -953,39 +990,6 @@ func rootMotion(delta)->void:
 
 	move_and_slide(Vector3(offset.x / delta, vertical_velocity.y, offset.z / delta), Vector3.UP)
 
-func physics(delta):
-	if root_motion_active:
-		if !is_in_water:
-			vertical_velocity += Vector3.DOWN * gravity * delta
-		else:
-			vertical_velocity.y = 0
-		move_and_slide(vertical_velocity, Vector3.UP)
-		return
-	if is_dashing:
-		dash_time += delta
-		dash_timer -= delta
-		var dash_dir = direction.normalized()
-		if dash_phase == 0:
-			dash_current_speed = dash_start_speed
-			if dash_time >= dash_start_delay:
-				dash_phase = 1
-				dash_time = 0.0
-		elif dash_phase == 1:
-			dash_current_speed = dash_start_speed
-			if dash_time >= 0.05:
-				dash_phase = 2
-				dash_time = 0.0
-		elif dash_phase == 2:dash_current_speed = lerp(dash_current_speed,dash_max_power,12.0 * delta)
-		horizontal_velocity = dash_dir * dash_current_speed
-		if dash_timer <= 0.0:
-			is_dashing = false
-			dash_phase = 0
-			dash_turn_multiplier = 1.0
-	else:horizontal_velocity = horizontal_velocity.linear_interpolate(direction.normalized() * movement_speed,acceleration * delta)
-	movement.z = horizontal_velocity.z + vertical_velocity.z
-	movement.x = horizontal_velocity.x + vertical_velocity.x
-	movement.y = vertical_velocity.y
-	move_and_slide(movement, Vector3.UP)
 
 
 
@@ -1046,16 +1050,208 @@ func dodgeCollisions(_delta) -> void:
 
 
 
-func _physics_process(delta)->void:
-	dodgeCollisions(delta)
 
+var mining_icons = []
+var chopping_icons = []
+var harvest_key = ""
+var loot_key = ""
+
+
+
+func _updateInputKeys():
+	harvest_key = InputMap.get_action_list("Harvest")[0].as_text().replace(" (Physical)", "").replace(" (physical)", "")
+
+	var loot_keys = []
+	for event in InputMap.get_action_list("loot"):
+		loot_keys.append(event.as_text().replace(" (Physical)", "").replace(" (physical)", ""))
+	loot_key = " / ".join(loot_keys)
+
+func _cacheToolIcons():
+	mining_icons.clear()
+	chopping_icons.clear()
+
+	for weapon_name in Items.weapons:
+		var weapon = Items.weapons[weapon_name]
+		var icon = weapon.icon
+		if typeof(icon) == TYPE_STRING:
+			icon = load(icon)
+
+		if weapon.has("mining power"):
+			mining_icons.append(icon)
+
+		if weapon.has("chopping power"):
+			chopping_icons.append(icon)
+
+
+func detectGathering() -> void:
+	var label:Label = $UI/ResourceDetectionLabel
+	label.visible = false
+	label.text = ""
+
+	for body in $"Turnable/Area".get_overlapping_bodies():
+		if body == self:
+			continue
+		if (body.is_in_group("entity") or body.is_in_group("Entity")) and "stats" in body and body.stats.health <= 0:
+			label.visible = true
+			label.text = "Press " + loot_key + " to loot"
+			return
+
+	var bash = $"Turnable/Bash"
+
+	for target in bash.get_overlapping_bodies():
+		if _handleGatherTarget(target, label):
+			return
+
+	for target in bash.get_overlapping_areas():
+		if _handleGatherTarget(target, label):
+			return
+
+func _handleGatherTarget(target, label:Label) -> bool:
+	if !is_instance_valid(target) or !target.is_in_group("Resource"):
+		return false
+
+	var main_hand=$"UI/Equipment/MainHand/Slot".texture
+	var inventory=$UI/Inventory/ScrollContainer/GridContainer
+	var has_pickaxe=main_hand in mining_icons
+	var has_axe=main_hand in chopping_icons
+
+	if !has_pickaxe or !has_axe:
+		for child in inventory.get_children():
+			var slot=child.get_node_or_null("Slot")
+			if !slot:continue
+			if !has_pickaxe and slot.texture in mining_icons:
+				has_pickaxe=true
+			if !has_axe and slot.texture in chopping_icons:
+				has_axe=true
+			if has_pickaxe and has_axe:
+				break
+
+	var can_harvest=false
+	for group in target.get_groups():
+		match group.to_lower():
+			"plant":
+				can_harvest=true
+			"rock","iron","gold":
+				can_harvest=has_pickaxe
+			"tree":
+				can_harvest=has_axe
+		if can_harvest:
+			break
+
+	if can_harvest and current_skill!="mine" and current_skill!="gather" and current_skill!="chop":
+		label.visible=true
+		label.text="Press "+harvest_key+" to Harvest"
+
+	if !Input.is_action_just_pressed("Harvest"):
+		return true
+
+	if !can_harvest:
+		return true
+
+	forceRotationTowardsTarget(target)
+
+	for group in target.get_groups():
+		match group.to_lower():
+			"plant":
+				skillbar.castSkill("gather")
+				return true
+			"rock","iron","gold":
+				skillbar.castSkill("mine")
+				return true
+			"tree":
+				skillbar.castSkill("chop")
+				return true
+
+	return true
+#func _handleGatherTarget(target, label:Label) -> bool:
+#	if !is_instance_valid(target) or !target.is_in_group("Resource"):
+#		return false
+#
+#	if current_skill != "mine" and current_skill != "gather" and current_skill != "chop":
+#		label.visible = true
+#		label.text = "Press " + harvest_key + " to Harvest"
+#
+#	if !Input.is_action_just_pressed("Harvest"):
+#		return true
+#
+#	forceRotationTowardsTarget(target)
+#
+#	var main_hand = $"UI/Equipment/MainHand/Slot".texture
+#	var inventory = $UI/Inventory/ScrollContainer/GridContainer
+#
+#	for group in target.get_groups():
+#		match group.to_lower():
+#			"plant":
+#				skillbar.castSkill("gather")
+#				return true
+#
+#			"rock", "iron", "gold":
+#				if main_hand in mining_icons:
+#					skillbar.castSkill("mine")
+#					return true
+#
+#				for child in inventory.get_children():
+#					var slot = child.get_node_or_null("Slot")
+#					if slot and slot.texture in mining_icons:
+#						skillbar.castSkill("mine")
+#						return true
+#
+#			"tree":
+#				if main_hand in chopping_icons:
+#					skillbar.castSkill("chop")
+#					return true
+#
+#				for child in inventory.get_children():
+#					var slot = child.get_node_or_null("Slot")
+#					if slot and slot.texture in chopping_icons:
+#						skillbar.castSkill("chop")
+#						return true
+#
+#	return true
+
+
+
+func detectCraftingStations()->void:
+	var smelting_system:Control=$UI/Crafting/Smelting
+	var recipes_book:Control=$UI/Crafting/RecipeeBook
+	var label:Label=$UI/ResourceDetectionLabel
+
+	var key=InputMap.get_action_list("Harvest")[0].as_text().replace(" (Physical)","").replace(" (physical)","")
+
+	for target in $"Turnable/Bash".get_overlapping_bodies()+$"Turnable/Bash".get_overlapping_areas():
+		if !is_instance_valid(target):continue
+		if target.is_in_group("Fire") and Input.is_action_just_pressed("Harvest"):
+			if crafting.current_fire!=target:
+				if crafting.current_fire:
+					crafting.saveSmelter(crafting.current_fire)
+				crafting.loadSmelter(target)
+			
+			smelting_system.visible=!smelting_system.visible
+			recipes_book.visible=false
+			inventory.visible=true
+			crafting.visible=true
+			return
+
+		if target.is_in_group("Portal"):
+			label.visible=true
+			label.text="Press "+key+" to enter portal"
+			if  Input.is_action_just_pressed("Harvest"):
+				var world = get_parent()
+				world.portal()
+
+
+onready var crafting:Control = $UI/Crafting
+onready var skill_tree_root:Control = $UI/SkillTreeRoot
+func _physics_process(delta)->void:
+
+	
+	dodgeCollisions(delta)
+	detectGathering()
 	if current_skill=="mine" or current_skill=="chop" or current_skill=="gather":
 		if !chat.line_edit.has_focus():
 			if Input.is_action_pressed("forward") or Input.is_action_pressed("backward") or Input.is_action_pressed("left")or Input.is_action_pressed("right"):
 				current_skill=""
 				anim_calls.unlockAnim()
-
-
 
 	if stats.health <= 0:
 		skillbar.combo_queue = 0
@@ -1065,32 +1261,38 @@ func _physics_process(delta)->void:
 		animation_tree.set("parameters/IsAlive/blend_amount",0)
 	if anim_locks["guard react"] == true:
 		anim_locks["guard"] = false 
-
-
+	if Engine.get_physics_frames() % 12 == 0:
+		if is_on_floor():
+			water_areas.clear()
+			is_in_water = false
 	animationOrder()
 	safetyStuff()
 	forceMovementAnimUnlock()
 	if Input.is_action_just_pressed("unstuck"):
-		translation.x = 0
-		translation.y = -130.362
-		translation.z = 0
-		enableEntityCollisions()
-		stats.health += 100000
-		is_dead = false
-		is_downed = false
-		unlockAnim()
+		if is_writing == false and is_chatting == false:
+			is_in_combat = !is_in_combat
+			translation.x = 0
+			translation.y = 20
+			translation.z = 0
+			enableEntityCollisions()
+			unlockAnim()
+			disableFallDamage()
+			is_in_water = false
 	if Input.is_action_just_pressed("out_of_combat"):
-		is_in_combat = !is_in_combat
+		if is_writing == false and is_chatting == false:
+			is_in_combat = !is_in_combat
 
-
+	if Input.is_action_just_pressed("skills"):
+		if is_writing == false and is_chatting == false:
+			skill_tree_root.visible = !skill_tree_root.visible
 	buoyancy(delta)
 	rootMotion(delta)
 	if anim_locks["stunned"] == false and anim_locks["staggered"] == false and is_dead == false:
 		jump()
 		movement(delta)
-		climb()
 	physics(delta)
 	collisionShapesManager()
+	
 	if cursor_visible == false:
 		dash()
 
@@ -1098,15 +1300,28 @@ func _physics_process(delta)->void:
 		loot.closeLoot()
 		inventory.clearCart()
 		inventory.shop.hide()
+		$UI/Crafting/Smelting.hide()
 		if inventory.buy_button.visible == false:
 			inventory.restoreBrokerItems()
 	if Input.is_action_just_pressed("character"):
-		equipment.visible = !equipment.visible
-		inventory.shop.visible =false
-		$UI/SkillTreeRoot.visible =false
+		if is_writing == false:
+			equipment.visible = !equipment.visible
+			inventory.shop.visible =false
+			$UI/SkillTreeRoot.visible =false
 		
-		
-		
+
+	crafting.update_crafting()
+	
+	if !crafting.visible:
+		crafting.returnCraftingItems()
+	else:
+		if is_writing == false:
+			if Input.is_action_just_pressed("help"):
+				crafting.recipes_book.visible  = false
+
+	detectCraftingStations()
+	if Engine.get_physics_frames() % 6 == 0:
+		forceWaterSwitch()
 	if Engine.get_physics_frames() % 12 == 0:
 		equipment.updateEquipment()
 	if Engine.get_physics_frames() % 35 == 0:
@@ -1128,6 +1343,20 @@ func _physics_process(delta)->void:
 	else:
 		vertical_velocity.y = 0
 	checkFall()
+
+
+func _input(event):
+	if event.is_action_pressed("Esc"):
+		is_writing = false
+		is_chatting = false
+		crafting.line_edit.release_focus()
+		chat.line_edit.release_focus()
+
+
+
+
+
+
 
 var moving:bool = false
 var movement_mode:String = "idle"
@@ -1158,7 +1387,34 @@ func clearMovementLocks()->void:
 
 var animation_almost_finished:bool = false
 var is_chatting:bool = false
+func forceRotationTowardsTarget(target)->void:
+	if !is_instance_valid(self) or !is_instance_valid(player_mesh) or !is_instance_valid(turnable):
+		return
+	if target==null:
+		return
+
+	var pos
+	if target is Spatial:
+		if !is_instance_valid(target):
+			return
+		pos=target.global_transform.origin
+	elif target is Vector3:
+		pos=target
+	else:
+		return
+
+	var dir=pos-global_transform.origin
+	dir.y=0
+	if dir.length_squared()==0:
+		return
+
+	var rot=atan2(dir.x,dir.z)-rotation.y
+	player_mesh.rotation.y=rot
+	turnable.rotation.y=rot
+var is_writing:bool= false
 func movement(delta) -> void:
+	if is_writing == true:
+		return
 	if stats.debuff_buffs_active.has("stunned") and float(stats.debuff_buffs_active["stunned"].get("duration",0.0)) > 0.0:
 		return
 	if is_chatting == true:
@@ -1434,44 +1690,7 @@ var stored_body_timer:int = 15
 
 onready var left_ray:RayCast = $Turnable/Left
 onready var right_ray:RayCast = $Turnable/Right
-var climbing_is_enabled:bool = false
-func climb() -> void:
-	if climbing_is_enabled == false:
-		return
-	is_climbing = false
-	var floor_hit = $RayCast.is_colliding()
-	var climb_hit = climb_ray.is_colliding()
-	var head_hit = head_ray.is_colliding()
-	var left_hit = $Turnable/Left.is_colliding()
-	var right_hit = $Turnable/Right.is_colliding()
-	if is_in_combat:
-		return
-	if !floor_hit:
-		if is_on_wall() and !head_hit and !is_on_floor() and !left_hit and !right_hit:
-			var wall_normal = climb_ray.get_collision_normal()
-			if wall_normal.y <= cos(deg2rad(85)):
-				direction = -wall_normal
-				player_mesh.rotation.y = atan2(direction.x, direction.z)
-				turnable.rotation.y = player_mesh.rotation.y
-				movement_mode = "vault"
-				is_airborne = false
-				horizontal_velocity = -wall_normal * stats.walk_speed * stats.derived_stats["climb_speed"] 
-				vertical_velocity = Vector3.UP * stats.derived_stats["climb_speed"] 
-				return
-		if is_on_wall() and climb_hit and head_hit and !left_hit and !right_hit and !is_on_floor():
-			if Input.is_action_pressed("forward"):
-				is_climbing = true
-
-				is_airborne = false
-				movement_mode = "climb"
-				var wall_normal = climb_ray.get_collision_normal()
-				var wall_right = wall_normal.cross(Vector3.UP).normalized()
-				direction = -wall_normal
-				player_mesh.rotation.y = atan2(direction.x, direction.z)
-				turnable.rotation.y = player_mesh.rotation.y
-				horizontal_velocity = Vector3.ZERO
-				vertical_velocity = Vector3.UP * stats.derived_stats["climb_speed"]
-		return
+var climbing_is_enabled:bool = true
 
 
 var is_wall_in_range:bool = false
@@ -1515,49 +1734,161 @@ var max_fall_speed := 0.0
 var fall_start_y := 0.0
 var is_falling := false
 var highest_y:float = 0.0
-var is_airborne:bool= false
+var is_airborne:bool = false
+var airborne_delay := 0.0
+
 export var safe_fall_speed := 28.0
-export var fall_damage_multiplier := 2.0
+export var fall_damage_multiplier := 4
+var fall_damage_grace_period := 0.0
+export var fall_damage_grace_time := 15
+func disableFallDamage():
+	fall_damage_grace_period = fall_damage_grace_time
+	is_airborne = false
+	was_on_floor = true
+	highest_y = global_transform.origin.y
 func checkFall():
-	if is_in_water == true:
-		is_airborne = false
+	if fall_damage_grace_period > 0.0:
+		fall_damage_grace_period -= get_physics_process_delta_time()
+		was_on_floor = is_on_floor()
+		highest_y = global_transform.origin.y
 		return
-	if is_airborne and !is_climbing:
-		movement_mode = "fall"
-		
-	var on_floor = is_on_floor()
+	if is_in_water:
+		is_airborne = false
+		airborne_delay = 0.0
+		return
+
+	var on_floor := is_on_floor()
+
 	# Left ground
 	if was_on_floor and !on_floor:
-		is_airborne = true
 		is_in_combat = false
 		highest_y = global_transform.origin.y
-	# Track highest point reached while is_airborne
-	if is_airborne:
+
+		if Input.is_action_pressed("sprint"):
+			airborne_delay = 0.3
+			is_airborne = false
+		else:
+			airborne_delay = 0.0
+			is_airborne = true
+
+	# Delay airborne while sprinting
+	if !on_floor and airborne_delay > 0.0:
+		airborne_delay -= get_physics_process_delta_time()
+		if airborne_delay <= 0.0:
+			is_airborne = true
+
+	if is_airborne and !is_climbing:
+		movement_mode = "fall"
+
+	# Track highest point
+	if !on_floor:
 		highest_y = max(highest_y, global_transform.origin.y)
 		animation_tree.active = true
-		animation_tree.set("parameters/Vertical/blend_amount",1)
+		animation_tree.set("parameters/Vertical/blend_amount", 1)
+
 	# Landed
-	if !was_on_floor and on_floor and is_airborne:
-		var landing_y = global_transform.origin.y
-		var fall_distance = highest_y - landing_y
-		if attacking == false:
-			if current_skill == "" or current_skill == "none":
+	if !was_on_floor and on_floor:
+		airborne_delay = 0.0
+
+		if is_airborne:
+			var landing_y = global_transform.origin.y
+			var fall_distance = highest_y - landing_y
+
+			if !attacking and (current_skill == "" or current_skill == "none"):
 				applyFallDamage(fall_distance)
+
 		is_airborne = false
+
 	was_on_floor = on_floor
+	
+	
+	
+	
 onready var chat:Control = $UI/Chat
+
+export var minimum_fall_distance := 3.0
+export var base_fall_damage_multiplier := 3
+export var base_fall_resistance := 1.0
+
 func applyFallDamage(fall_distance: float):
+	if fall_damage_grace_period > 0.0:
+		return
 	if fall_distance < stats.derived_stats["jump_power"]:
 		return
-	var damage=int(max(0.0,round(((fall_distance-3.0)*2.0)/(1.0+stats.derived_stats["fall_resistance"])-stats.derived_stats["jump_power"])))
-	stats.health-=damage
-	is_in_combat=false
-	if damage>=1:
-		chat.sendSystemMessage(entity_name+" took "+str(damage)+" fall damage")
+
+	var damage := int(max(0.0, round(((fall_distance - minimum_fall_distance) * base_fall_damage_multiplier) / (base_fall_resistance + stats.derived_stats["fall_resistance"]) - stats.derived_stats["jump_power"])))
+
+	stats.health -= damage
+	is_in_combat = false
+
+	if damage > 0:
+		chat.sendSystemMessage(entity_name + " took " + str(damage) + " fall damage")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 var is_in_water:bool = false
 var water_areas := []
-func isWaterArea(area)->bool:
+
+func physics(delta):
+	if root_motion_active:
+		if is_in_water:
+				translation.y += vertical_velocity.y * get_physics_process_delta_time()
+
+				movement.x = horizontal_velocity.x
+				movement.y = 0
+				movement.z = horizontal_velocity.z
+
+				move_and_slide(movement,Vector3.ZERO,false,4,PI,false)
+		else:
+			vertical_velocity = move_and_slide(vertical_velocity,Vector3.ZERO,false,4,PI,false)
+		return
+	if is_dashing:
+		dash_time += delta
+		dash_timer -= delta
+		var dash_dir = direction.normalized()
+		if dash_phase == 0:
+			dash_current_speed = dash_start_speed
+			if dash_time >= dash_start_delay:
+				dash_phase = 1
+				dash_time = 0.0
+		elif dash_phase == 1:
+			dash_current_speed = dash_start_speed
+			if dash_time >= 0.05:
+				dash_phase = 2
+				dash_time = 0.0
+		elif dash_phase == 2:dash_current_speed = lerp(dash_current_speed,dash_max_power,12.0 * delta)
+		horizontal_velocity = dash_dir * dash_current_speed
+		if dash_timer <= 0.0:
+			is_dashing = false
+			dash_phase = 0
+			dash_turn_multiplier = 1.0
+	else:horizontal_velocity = horizontal_velocity.linear_interpolate(direction.normalized() * movement_speed,acceleration * delta)
+	movement.z = horizontal_velocity.z + vertical_velocity.z
+	movement.x = horizontal_velocity.x + vertical_velocity.x
+	movement.y = vertical_velocity.y
+	if is_in_water:
+			translation.y += vertical_velocity.y * get_physics_process_delta_time()
+
+			movement.x = horizontal_velocity.x
+			movement.y = 0
+			movement.z = horizontal_velocity.z
+
+			move_and_slide(movement,Vector3.ZERO,false,4,PI,false)
+	else:
+		movement = move_and_slide(movement,Vector3.UP)
+func isWaterArea(area) -> bool:
 	var node = area
 	while node:
 		if node.is_in_group("Water") or node.is_in_group("water"):
@@ -1567,40 +1898,142 @@ func isWaterArea(area)->bool:
 		node = node.get_parent()
 	return false
 
-func _on_WaterLevelChest_area_shape_entered(area_rid, area, area_shape_index,_local_shape_index):
+onready var water_level_area:Area = $WaterLevelChest
+onready var water_level_legs_area:Area = $WaterLevelLegs
+func enterDeepWaters(area_rid, area, area_shape_index, _local_shape_index):
 	if isWaterArea(area):
 		if !water_areas.has(area):
 			water_areas.append(area)
 		is_in_water = true
 		is_in_combat = false
-		stats.applyBuffDebuff("wrenched",self)
+		stats.applyBuffDebuff("wrenched", self)
 
-func _on_WaterLevelChest_area_shape_exited(area_rid, area, area_shape_index,_local_shape_index):
-	if water_areas.has(area):
-		water_areas.erase(area)
-	is_in_water = water_areas.size() > 0
-onready var water_level_area:Area = $WaterLevelChest
-func buoyancy(_delta)->void:
+
+var water_exit_pending := false
+
+func exitDeepWaters(area_rid, area, area_shape_index, _local_shape_index):
+	if water_exit_pending:
+		return
+
+	water_exit_pending = true
+	yield(get_tree().create_timer(2.0), "timeout")
+	water_exit_pending = false
+
+	var touching_floor = is_on_floor()
+
+	if is_instance_valid($DistanceToFloordRay):
+		touching_floor = touching_floor or $DistanceToFloordRay.is_colliding()
+
+	if touching_floor:
+		if water_areas.has(area):
+			water_areas.erase(area)
+
+		var valid_water_areas := []
+		for water_area in water_areas:
+			if is_instance_valid(water_area):
+				valid_water_areas.append(water_area)
+
+		water_areas = valid_water_areas
+		is_in_water = water_areas.size() > 0
+
+
+func getWaterSurfaceY(area: Area) -> float:
+	var node = area
+
+	while node:
+		if node is MeshInstance and node.mesh is CubeMesh:
+			var size = node.mesh.size
+			return node.global_transform.origin.y + size.y * node.global_transform.basis.get_scale().y * 0.5
+		node = node.get_parent()
+
+	return area.global_transform.origin.y
+
+func buoyancy(_delta) -> void:
+	var valid_water_areas := []
+	for water_area in water_areas:
+		if is_instance_valid(water_area):
+			valid_water_areas.append(water_area)
+
+	water_areas = valid_water_areas
+
 	if !is_in_water:
 		return
+
+	var chest_underwater = false
+	for area in water_level_area.get_overlapping_areas():
+		if isWaterArea(area):
+			chest_underwater = true
+			break
+
 	var speed = stats.derived_stats["swim_speed"]
 	var surface_offset = 1.35
 	var can_go_up = false
+
 	for area in water_areas:
-		if !is_instance_valid(area):
-			continue
-		var water_y = area.global_transform.origin.y + surface_offset
-		if global_transform.origin.y < water_y:
+		var water_surface_y = getWaterSurfaceY(area) + surface_offset
+
+		if global_transform.origin.y < water_surface_y:
 			can_go_up = true
 			break
+
+	# At water surface, jump exits water instead of swimming upward
+	if Input.is_action_pressed("jump") and !chest_underwater:
+		water_areas.clear()
+		is_in_water = false
+		return
+
 	if Input.is_action_pressed("crouch"):
 		vertical_velocity.y = -speed
+
 	elif Input.is_action_pressed("jump") and can_go_up:
 		vertical_velocity.y = speed
-	elif can_go_up:
-		vertical_velocity.y = speed * 0.35
+
+	elif chest_underwater and can_go_up:
+		vertical_velocity.y = max(vertical_velocity.y, speed * 0.35)
+
 	else:
-		vertical_velocity.y = 0
+		vertical_velocity.y = 0.0
+
+
+var force_water_timer := 0.0
+
+func forceWaterSwitch() -> void:
+	if !is_instance_valid(water_level_area):
+		return
+
+	var chest_in_water := false
+
+	for area in water_level_area.get_overlapping_areas():
+		if isWaterArea(area):
+			chest_in_water = true
+
+			if !water_areas.has(area):
+				water_areas.append(area)
+
+	if chest_in_water:
+		force_water_timer = 0.0
+		is_in_water = true
+	else:
+		force_water_timer += 6.0 / float(Engine.iterations_per_second)
+
+		if force_water_timer >= 1.0:
+			if $DistanceToFloordRay.is_colliding():
+				water_areas.clear()
+				is_in_water = false
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 func safetyStuff()->void:
@@ -1659,6 +2092,606 @@ func ApplySex():
 	stats.applySpecies()
 	stats.resetAttributePoints()
 	
-	
 func _on_SexChange_mouse_entered():
 	 $UI/Chat/SexChange.text = stats.sex
+func saveData()->void:
+	if !is_instance_valid(self):
+		return
+
+	var world_id = get_parent().world_id
+	var save_dir = "user://"
+	var save_path = save_dir + name + "_" + entity_name + ".save"
+	var dir = Directory.new()
+
+	if !dir.dir_exists(save_dir):
+		dir.make_dir_recursive(save_dir)
+
+	var data = {
+		"position": translation,
+		"current_skill": current_skill,
+		"cursor_visible": cursor_visible,
+		"direction": direction,
+		"which_scene": which_scene,
+		"world_id": world_id
+	}
+
+	if is_instance_valid(character):
+		data.character_rotation = character.rotation
+	if is_instance_valid(turnable):
+		data.turnable_rotation = turnable.rotation
+	if is_inside_tree():
+		data.rotation = rotation
+
+	var file = File.new()
+	if file.open(save_path, File.WRITE) == OK:
+		file.store_var(data)
+		file.close()
+
+	# Update the character's sex inside button_list.save
+	var button_list_path = "user://button_list.save"
+	var button_data = {
+		"buttons": [],
+		"sexes": {}
+	}
+
+	var button_file = File.new()
+
+	if button_file.file_exists(button_list_path):
+		if button_file.open(button_list_path, File.READ) == OK:
+			var loaded_data = button_file.get_var()
+			button_file.close()
+
+			if typeof(loaded_data) == TYPE_DICTIONARY:
+				button_data = loaded_data
+
+	if !button_data.has("buttons") or typeof(button_data["buttons"]) != TYPE_ARRAY:
+		button_data["buttons"] = []
+
+	if !button_data.has("sexes") or typeof(button_data["sexes"]) != TYPE_DICTIONARY:
+		button_data["sexes"] = {}
+
+	if button_data["buttons"].find(entity_name) == -1:
+		button_data["buttons"].append(entity_name)
+
+	button_data["sexes"][entity_name] = stats.sex
+
+	if button_file.open(button_list_path, File.WRITE) == OK:
+		button_file.store_var(button_data)
+		button_file.close()
+
+func loadData()->void:
+	var save_path = "user://" + name + "_" + entity_name + ".save"
+
+	var file = File.new()
+
+	if !file.file_exists(save_path):
+		return
+
+	if file.open(save_path, File.READ) != OK:
+		return
+
+	var data = file.get_var()
+	file.close()
+
+	if typeof(data) != TYPE_DICTIONARY:
+		return
+
+	if data.has("rotation"):
+		rotation = data["rotation"]
+
+	if data.has("which_scene"):
+		which_scene = data["which_scene"]
+
+	if data.has("character_rotation") and is_instance_valid(character):
+		character.rotation = data["character_rotation"]
+
+	if data.has("turnable_rotation") and is_instance_valid(turnable):
+		turnable.rotation = data["turnable_rotation"]
+
+
+	if data.has("cursor_visible"):
+		cursor_visible = data["cursor_visible"]
+
+	if data.has("direction"):
+		direction = data["direction"]
+
+	yield(get_tree(), "idle_frame")
+
+	if which_portal != "":
+		match which_portal:
+			"mines":
+				translation.x = -5.243
+				translation.y = 1.101
+				translation.z = 13.625
+
+			"world":
+				translation.x = 22.5
+				translation.y = -16.349
+				translation.z = 41.371
+
+			_:
+				if data.has("world_id"):
+					var current_world_id = get_parent().world_id
+
+					if current_world_id != data["world_id"]:
+						switchToSavedWorld(data["world_id"], data)
+						return
+
+				if data.has("position"):
+					translation = data["position"]
+
+	else:
+		if data.has("world_id"):
+			var current_world_id = get_parent().world_id
+
+			if current_world_id != data["world_id"]:
+				switchToSavedWorld(data["world_id"], data)
+				return
+
+		if data.has("position"):
+			translation = data["position"]
+	yield(get_tree(), "physics_frame")
+	disableFallDamage()
+
+func switchToSavedWorld(saved_world_id:String, data:Dictionary)->void:
+	var target_scene = "res://World.tscn"
+
+	if saved_world_id == "mines":
+		target_scene = "res://mines.tscn"
+
+	var packed_scene = load(target_scene)
+
+	if packed_scene == null:
+		return
+
+	var new_scene = packed_scene.instance()
+
+	var old_scene = get_tree().current_scene
+
+	get_tree().root.add_child(new_scene)
+	get_tree().current_scene = new_scene
+
+	var player_found = false
+
+	for node in new_scene.get_children():
+		if node.is_in_group("Player") and node.entity_name == entity_name:
+			player_found = true
+
+			if data.has("position"):
+				node.translation = data["position"]
+
+			break
+
+	if !player_found:
+		var new_player = load("res://world/player/scenes/Player.tscn").instance()
+
+		new_player.entity_name = entity_name
+		new_player.which_scene = saved_world_id
+
+		new_scene.add_child(new_player)
+
+		if data.has("position"):
+			new_player.translation = data["position"]
+
+	old_scene.queue_free()
+
+
+
+func loadCharacterData()->void:
+	var file = File.new()
+	if !file.file_exists("user://button_list.save"):
+		return
+	if file.open("user://button_list.save", File.READ) != OK:
+		return
+	var data = file.get_var()
+	file.close()
+	if typeof(data) != TYPE_DICTIONARY:
+		return
+	if data.has("sexes") and typeof(data["sexes"]) == TYPE_DICTIONARY:
+		var sexes:Dictionary = data["sexes"]
+		if sexes.has(entity_name):
+			stats.sex = sexes[entity_name]
+
+
+	call_deferred("loadBoneData")
+	call_deferred("loadHairData")
+	yield(get_tree(),"idle_frame")
+	call_deferred("loadBlendShapeData")
+	call_deferred("loadEyeData")
+var boneDefaultRest = {}
+
+var lastSkeleton = null
+func loadBoneData()->void:
+	yield(get_tree(),"idle_frame")
+	yield(get_tree(),"idle_frame")
+
+	var currentSkeleton:Skeleton = get_node_or_null("character/root/Skeleton")
+
+	if currentSkeleton == null:
+		return
+
+	if lastSkeleton != currentSkeleton:
+		boneDefaultRest.clear()
+		lastSkeleton = currentSkeleton
+
+	var file = File.new()
+
+	if !file.file_exists("user://button_list.save"):
+		return
+
+	if file.open("user://button_list.save", File.READ) != OK:
+		return
+
+	var data = file.get_var()
+	file.close()
+
+	if typeof(data) != TYPE_DICTIONARY:
+		return
+
+	if data.has("sexes") and typeof(data["sexes"]) == TYPE_DICTIONARY:
+		if data["sexes"].has(entity_name):
+			stats.sex = data["sexes"][entity_name]
+
+	if !data.has("bone_scale"):
+		return
+
+	if typeof(data["bone_scale"]) != TYPE_DICTIONARY:
+		return
+
+	if !data["bone_scale"].has(entity_name):
+		return
+
+	var savedBones:Dictionary = data["bone_scale"][entity_name]
+
+	for boneName in savedBones:
+
+		if !is_instance_valid(currentSkeleton):
+			return
+
+		var boneIndex = currentSkeleton.find_bone(boneName)
+
+		if boneIndex == -1:
+			continue
+
+		if !boneDefaultRest.has(boneName):
+			boneDefaultRest[boneName] = currentSkeleton.get_bone_rest(boneIndex)
+
+		var bone = savedBones[boneName]
+
+		if typeof(bone) != TYPE_DICTIONARY:
+			bone = {
+				"scale":1.0,
+				"width":1.0,
+				"height":1.0,
+				"depth":1.0,
+				"rotation":0.0,
+				"position":Vector3()
+			}
+
+		if !bone.has("scale"):
+			bone["scale"] = 1.0
+		if !bone.has("width"):
+			bone["width"] = 1.0
+		if !bone.has("height"):
+			bone["height"] = 1.0
+		if !bone.has("depth"):
+			bone["depth"] = 1.0
+		if !bone.has("rotation"):
+			bone["rotation"] = 0.0
+		if !bone.has("position") or typeof(bone["position"]) != TYPE_VECTOR3:
+			bone["position"] = Vector3()
+
+		var position:Vector3 = bone["position"]
+
+		if boneName == "clavicle_l" or boneName == "clavicle_r":
+			position.x = -position.x
+
+		var rest:Transform = boneDefaultRest[boneName]
+
+		var basis:Basis = rest.basis
+
+		basis = basis.scaled(Vector3(
+			bone["scale"] * bone["width"],
+			bone["scale"] * bone["height"],
+			bone["scale"] * bone["depth"]
+		))
+
+		basis = basis.rotated(
+			Vector3.UP,
+			deg2rad(bone["rotation"])
+		)
+
+		currentSkeleton.set_bone_rest(
+			boneIndex,
+			Transform(
+				basis,
+				rest.origin + position
+			)
+		)
+func loadHairData()->void:
+	yield(get_tree(),"idle_frame")
+	yield(get_tree(),"idle_frame")
+
+	var skeleton:Skeleton=get_node_or_null("character/root/Skeleton")
+	if skeleton==null:
+		return
+
+	var file=File.new()
+	if !file.file_exists("user://button_list.save"):
+		return
+	if file.open("user://button_list.save",File.READ)!=OK:
+		return
+
+	var data=file.get_var()
+	file.close()
+
+	if typeof(data)!=TYPE_DICTIONARY:
+		return
+
+	var style:=0
+	if data.has("hair") and typeof(data["hair"])==TYPE_DICTIONARY and data["hair"].has(entity_name):
+		style=int(data["hair"][entity_name])
+
+	var textureVariant:=0
+	if data.has("hair_texture") and typeof(data["hair_texture"])==TYPE_DICTIONARY and data["hair_texture"].has(entity_name):
+		textureVariant=int(data["hair_texture"][entity_name])
+
+	var color:=Color.white
+	if data.has("hair_colors") and typeof(data["hair_colors"])==TYPE_DICTIONARY and data["hair_colors"].has(entity_name):
+		color=data["hair_colors"][entity_name]
+
+	var paths={
+		"male":[
+			"res://world/player/human/male/hair/1.tscn",
+			"res://world/player/human/male/hair/2.tscn",
+			"res://world/player/human/male/hair/3.tscn"],
+		"female":[
+			"res://world/player/human/female/hair/1.tscn",
+			"res://world/player/human/female/hair/2.tscn",
+			"res://world/player/human/female/hair/3.tscn"]}
+
+	var textures={
+		"male":[#placeholder
+			"res://world/player/human/female/hair/textures/hair1fem.png",
+			"res://world/player/human/female/hair/textures/hair1fem_dark.png",
+			"res://world/player/human/female/hair/textures/hair1fem_darker.png",
+			"res://world/player/human/female/hair/textures/hair1fem_darkest.png",
+			"res://world/player/human/female/hair/textures/hair2fem.png",
+			"res://world/player/human/female/hair/textures/hair2fem_dark.png",
+			"res://world/player/human/female/hair/textures/hair2fem_darker.png",
+			"res://world/player/human/female/hair/textures/hair2fem_darkest.png",
+			"res://world/player/human/female/hair/textures/hair3fem.png",
+			"res://world/player/human/female/hair/textures/hair3fem_dark.png",
+			"res://world/player/human/female/hair/textures/hair3fem_darker.png",
+			"res://world/player/human/female/hair/textures/hair3fem_darkest.png"],
+		"female":[
+			"res://world/player/human/female/hair/textures/hair1fem.png",
+			"res://world/player/human/female/hair/textures/hair1fem_dark.png",
+			"res://world/player/human/female/hair/textures/hair1fem_darker.png",
+			"res://world/player/human/female/hair/textures/hair1fem_darkest.png",
+			"res://world/player/human/female/hair/textures/hair2fem.png",
+			"res://world/player/human/female/hair/textures/hair2fem_dark.png",
+			"res://world/player/human/female/hair/textures/hair2fem_darker.png",
+			"res://world/player/human/female/hair/textures/hair2fem_darkest.png",
+			"res://world/player/human/female/hair/textures/hair3fem.png",
+			"res://world/player/human/female/hair/textures/hair3fem_dark.png",
+			"res://world/player/human/female/hair/textures/hair3fem_darker.png",
+			"res://world/player/human/female/hair/textures/hair3fem_darkest.png"]}
+
+	if !paths.has(stats.sex):
+		return
+
+	style=clamp(style,0,paths[stats.sex].size()-1)
+	textureVariant=clamp(textureVariant,0,3)
+
+	for child in skeleton.get_children():
+		if child.name=="Hair" or child.is_in_group("Hair"):
+			child.free()
+
+	var hair=load(paths[stats.sex][style]).instance()
+	hair.name="Hair"
+	skeleton.add_child(hair)
+	makeHairUnique(hair)
+	applyHairTextureRecursive(hair,load(textures[stats.sex][style*4+textureVariant]))
+	applyHairColorRecursive(hair,color)
+
+
+
+func makeHairUnique(node:Node):
+	if node is MeshInstance:
+		if node.mesh:
+			node.mesh=node.mesh.duplicate()
+			for i in range(node.mesh.get_surface_count()):
+				var material=node.mesh.surface_get_material(i)
+				if material:
+					material=material.duplicate()
+					node.mesh.surface_set_material(i,material)
+					node.set_surface_material(i,material)
+		if node.material_override:
+			node.material_override=node.material_override.duplicate()
+		if node.material_overlay:
+			node.material_overlay=node.material_overlay.duplicate()
+	for child in node.get_children():
+		makeHairUnique(child)
+
+
+var headInstance=null
+
+func loadBlendShapeData():
+	yield(get_tree(),"idle_frame")
+	yield(get_tree(),"idle_frame")
+
+	var skeleton=$character/root/Skeleton
+	if skeleton==null:
+		return
+
+	if is_instance_valid(headInstance):
+		headInstance.queue_free()
+
+	var head=load("res://world/player/human/"+stats.sex+"/Head0.tscn")
+	if head:
+		headInstance=head.instance()
+		headInstance.name="Head"
+		skeleton.add_child(headInstance)
+
+	yield(get_tree(),"idle_frame")
+
+	var file=File.new()
+	if !file.file_exists("user://button_list.save"):
+		return
+
+	if file.open("user://button_list.save",File.READ)!=OK:
+		return
+
+	var data=file.get_var()
+	file.close()
+
+	if typeof(data)!=TYPE_DICTIONARY:
+		return
+
+	if !data.has("blend_shapes") or !data["blend_shapes"].has(entity_name):
+		return
+
+	var shapes=data["blend_shapes"][entity_name]
+
+	if typeof(shapes)!=TYPE_DICTIONARY:
+		return
+
+	var meshes=[]
+	findBlendMeshes(skeleton,meshes)
+
+	for key in shapes:
+		var parts=str(key).split("_",false,1)
+
+		if parts.size()!=2:
+			continue
+
+		var bodyPart=parts[0]
+		var shape=parts[1]
+		var value=float(shapes[key])
+
+		for mesh in meshes:
+			var isHead="head" in mesh.name.to_lower()
+
+			if bodyPart=="Head" and !isHead:
+				continue
+			if bodyPart=="Body" and isHead:
+				continue
+
+			for i in range(mesh.mesh.get_blend_shape_count()):
+				if mesh.mesh.get_blend_shape_name(i)==shape:
+					mesh.set("blend_shapes/"+shape,value)
+					break
+func findBlendMeshes(node,meshes):
+	if node is MeshInstance and node.mesh and node.mesh.get_blend_shape_count()>0:
+		meshes.append(node)
+
+	for child in node.get_children():
+		findBlendMeshes(child,meshes)
+
+
+func loadEyeData():
+	yield(get_tree(),"idle_frame")
+	yield(get_tree(),"idle_frame")
+
+	if !is_instance_valid(headInstance):
+		return
+
+	var file=File.new()
+	if !file.file_exists("user://button_list.save"):
+		return
+	if file.open("user://button_list.save",File.READ)!=OK:
+		return
+
+	var data=file.get_var()
+	file.close()
+
+	if typeof(data)!=TYPE_DICTIONARY:
+		return
+	if !data.has("eye_colors"):
+		return
+	if typeof(data["eye_colors"])!=TYPE_DICTIONARY:
+		return
+	if !data["eye_colors"].has(entity_name):
+		return
+
+	var eyes=data["eye_colors"][entity_name]
+
+	if typeof(eyes)!=TYPE_DICTIONARY:
+		return
+
+	var mesh:MeshInstance=null
+
+	if headInstance is MeshInstance:
+		mesh=headInstance
+	else:
+		for child in headInstance.get_children():
+			if child is MeshInstance:
+				mesh=child
+				break
+
+	if mesh==null:
+		return
+
+	var material_path="res://world/player/human/"+stats.sex+"/materials/Head0.tres"
+	var material=load(material_path)
+
+	if !(material is ShaderMaterial):
+		return
+
+	material=material.duplicate()
+	material.set_shader_param("eye_left_color",eyes.get("left",Color.white))
+	material.set_shader_param("eye_right_color",eyes.get("right",Color.white))
+
+	for i in range(mesh.get_surface_material_count()):
+		mesh.set_surface_material(i,material)
+
+
+
+
+
+func applyHairColorRecursive(node:Node,color:Color):
+	if node is MeshInstance:
+		if node.material_override:
+			node.material_override=node.material_override.duplicate()
+			node.material_override.albedo_color=color
+
+		if node.material_overlay:
+			node.material_overlay=node.material_overlay.duplicate()
+			node.material_overlay.albedo_color=color
+
+		for i in range(node.mesh.get_surface_count() if node.mesh else 0):
+			var material=node.get_surface_material(i)
+			if material==null and node.mesh:
+				material=node.mesh.surface_get_material(i)
+			if material:
+				material=material.duplicate()
+				material.albedo_color=color
+				node.set_surface_material(i,material)
+	for child in node.get_children():
+		applyHairColorRecursive(child,color)
+func applyHairTextureRecursive(node:Node,texture:Texture):
+	if node is MeshInstance:
+		if node.material_override:
+			node.material_override=node.material_override.duplicate()
+			node.material_override.albedo_texture=texture
+
+		if node.material_overlay:
+			node.material_overlay=node.material_overlay.duplicate()
+			node.material_overlay.albedo_texture=texture
+
+		if node.mesh:
+			for i in range(node.mesh.get_surface_count()):
+				var material=node.get_surface_material(i)
+				if material==null:
+					material=node.mesh.surface_get_material(i)
+				if material:
+					material=material.duplicate()
+					material.albedo_texture=texture
+					node.mesh.surface_set_material(i,material)
+					node.set_surface_material(i,material)
+
+	for child in node.get_children():
+		applyHairTextureRecursive(child,texture)
+
+

@@ -251,7 +251,8 @@ func findArmorScene(icon:Texture,slot:TextureRect,slot_type:String,default_scene
 	slot.texture=null
 	return default_scene
 	
-func updateArmorCache(species:String,sex:String):
+	
+func updateArmorCache(species:String,sex):
 	var defaults=default_scenes.get(species,null)
 	if !defaults:
 		return
@@ -260,28 +261,10 @@ func updateArmorCache(species:String,sex:String):
 	if !sex_defaults:
 		return
 
-	var is_full_armor=false
-
-	if slot_torso.texture:
-		for armor in Items.armors.values():
-			if !sameIcon(armor.icon,slot_torso.texture):
-				continue
-
-			if armor.get("full",false):
-				is_full_armor=true
-			break
-
-	torso_scene=findArmorScene(slot_torso.texture,slot_torso,"torso",sex_defaults.torso,species,sex)
-
-	if is_full_armor:
-		hands_scene=null
-		feet_scene=null
-	else:
-		hands_scene=findArmorScene(slot_hands.texture,slot_hands,"hands",sex_defaults.hands,species,sex)
-		feet_scene=findArmorScene(slot_feet.texture,slot_feet,"feet",sex_defaults.feet,species,sex)
-
-
-
+	torso_scene=findArmorScene(slot_torso.texture,slot_torso,"torso",sex_defaults.get("torso",null),species,sex)
+	hands_scene=findArmorScene(slot_hands.texture,slot_hands,"hands",sex_defaults.get("hands",null),species,sex)
+	feet_scene=findArmorScene(slot_feet.texture,slot_feet,"feet",sex_defaults.get("feet",null),species,sex)
+	
 func equipmentChanged()->bool:
 	return !(
 		current_species==$"../../Stats".species
@@ -348,8 +331,6 @@ const SKIN_MATERIAL = preload("res://world/player/human/mesh/Torso0.material")
 
 func replaceEquipmentNode(current_node,scene):
 	if scene==null:
-		if is_instance_valid(current_node):
-			current_node.queue_free()
 		return null
 
 	var c=$"../../character"
@@ -376,12 +357,6 @@ func replaceEquipmentNode(current_node,scene):
 	sk.add_child(node)
 	player.loadCharacterData()
 	return node
-
-
-
-
-
-
 
 func updateTorso() -> void:
 	current_torso_node = replaceEquipmentNode(current_torso_node,torso_scene)
@@ -450,22 +425,13 @@ func startToolSkill(skill,inven)->void:
 		stopToolSkill(inven)
 
 	var current=findWeaponFromIcon(slot_mainhand.texture)
-
-	# Already holding correct tool: remove offhand anyway
 	if !current.empty() and current.has(skill+" power"):
-		if slot_offhand.texture:
-			var offhand=findWeaponFromIcon(slot_offhand.texture)
-			if !offhand.empty():
-				CommonBehaviours.addNotStackableItem(inven,offhand,self)
-			slot_offhand.texture=null
-
 		active_tool_skill=skill
 		return
 
 	active_tool_skill=skill
 	skill_original_slots=[]
 
-	# Store main hand
 	if slot_mainhand.texture:
 		for slot in inven.get_children():
 			var icon=slot.get_node_or_null("Slot")
@@ -475,7 +441,6 @@ func startToolSkill(skill,inven)->void:
 				slot_mainhand.texture=null
 				break
 
-	# Store offhand
 	if slot_offhand.texture:
 		for slot in inven.get_children():
 			var icon=slot.get_node_or_null("Slot")
@@ -487,41 +452,6 @@ func startToolSkill(skill,inven)->void:
 
 	skill_took_tool=false
 	swapSkillTool(skill,inven)
-#func startToolSkill(skill,inven)->void:
-#	if active_tool_skill==skill:
-#		return
-#
-#	if active_tool_skill!="":
-#		stopToolSkill(inven)
-#
-#	var current=findWeaponFromIcon(slot_mainhand.texture)
-#	if !current.empty() and current.has(skill+" power"):
-#		active_tool_skill=skill
-#		return
-#
-#	active_tool_skill=skill
-#	skill_original_slots=[]
-#
-#	if slot_mainhand.texture:
-#		for slot in inven.get_children():
-#			var icon=slot.get_node_or_null("Slot")
-#			if icon and !icon.texture:
-#				icon.texture=slot_mainhand.texture
-#				skill_original_slots.append({"hand":0,"slot":icon})
-#				slot_mainhand.texture=null
-#				break
-#
-#	if slot_offhand.texture:
-#		for slot in inven.get_children():
-#			var icon=slot.get_node_or_null("Slot")
-#			if icon and !icon.texture:
-#				icon.texture=slot_offhand.texture
-#				skill_original_slots.append({"hand":1,"slot":icon})
-#				slot_offhand.texture=null
-#				break
-#
-#	skill_took_tool=false
-#	swapSkillTool(skill,inven)
 
 
 func stopToolSkill(inven)->void:
@@ -549,6 +479,41 @@ func stopToolSkill(inven)->void:
 	skill_original_slots=[]
 	skill_took_tool=false
 	active_tool_skill=""
+
+#func stopToolSkill(inven)->void:
+#	if active_tool_skill=="":
+#		return
+#
+#	if skill_took_tool and slot_mainhand.texture:
+#		var tool=findWeaponFromIcon(slot_mainhand.texture)
+#		if !tool.empty():
+#			CommonBehaviours.addNotStackableItem(inven,tool,self)
+#
+#	slot_mainhand.texture=null
+#	slot_offhand.texture=null
+#
+#	for data in skill_original_slots:
+#		var icon=data["slot"]
+#		if !is_instance_valid(icon):
+#			continue
+#
+#		if data["hand"]==0:
+#			slot_mainhand.texture=icon.texture
+#		else:
+#			slot_offhand.texture=icon.texture
+#
+#		icon.texture=null
+#
+#	skill_original_slots=[]
+#	skill_took_tool=false
+#	active_tool_skill=""
+
+
+
+
+
+
+
 
 func swapSkillTool(skill,inven)->void:
 	var tools=[]
@@ -615,7 +580,7 @@ func updateWeaponVisuals(inventory_grid,floating_parent)->void:
 	var two_handed=main_weapon.get("two handed",false)
 	slot_offhand.get_parent().visible=!two_handed
 
-	if two_handed and slot_offhand.texture:
+	if two_handed and slot_offhand.texture and !was_mining:
 		var returned_weapon=findWeaponFromIcon(slot_offhand.texture)
 		if !returned_weapon.empty():
 			CommonBehaviours.addNotStackableItem(inventory_grid,returned_weapon,floating_parent)
@@ -626,7 +591,7 @@ func updateWeaponVisuals(inventory_grid,floating_parent)->void:
 	var shield_weapon={}
 
 	if !offhand_item.empty():
-		if offhand_item.get("two handed",false):
+		if offhand_item.get("two handed",false) and !was_mining:
 			CommonBehaviours.addNotStackableItem(inventory_grid,offhand_item,floating_parent)
 			slot_offhand.texture=null
 		elif offhand_item.get("carry","")=="shield":

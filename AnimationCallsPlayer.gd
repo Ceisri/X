@@ -30,6 +30,7 @@ func combo_atk()->void:
 
 
 func mine()->void:
+	var chat:Control=$"../UI/Chat"
 	var item_slot=$"../UI/Equipment/MainHand/Slot"
 	var inventory=parent.inventory
 	var inventory_grid=inventory.inventory_grid
@@ -49,51 +50,119 @@ func mine()->void:
 
 	for body in mining_area.get_overlapping_bodies():
 		var item_data=null
+		var item_name=""
+		if body.has_method("gather"): body.gather()
 		if body.is_in_group("rock") or body.is_in_group("Rock"):
 			item_data=Items.resources["stone"]
+			item_name="stone"
 		elif body.is_in_group("gold") or body.is_in_group("Gold"):
 			item_data=Items.resources["gold ore"]
+			item_name="gold ore"
 		elif body.is_in_group("iron") or body.is_in_group("Iron"):
 			item_data=Items.resources["iron ore"]
+			item_name="iron ore"
+
 		if item_data:
-			stats.getExperience(1)
 			CommonBehaviours.addStackableItem(inventory_grid,item_data,floating_text_parent,quantity)
+			chat.sendSystemMessage("Gathered %d %s."%[quantity,item_name])
+			var experience_gained:int = 1
+			stats.getExperience(experience_gained)
 
-
+			
+			
+			
 func chop()->void:
+	var chat:Control=$"../UI/Chat"
 	var item_slot=$"../UI/Equipment/MainHand/Slot"
 	var inventory=parent.inventory
 	var inventory_grid=inventory.inventory_grid
 	var floating_text_parent=inventory.floating_text_parent
-	var mining_area:Area=$"../Turnable/Bash"
+	var chopping_area:Area=$"../Turnable/Bash"
 	var stats=parent.stats
-	var mining_power:=1
+	var chopping_power:=1
 
 	for key in Items.weapons:
 		var icon=Items.weapons[key]["icon"]
 		var texture=load(icon) if typeof(icon)==TYPE_STRING else icon
 		if texture==item_slot.texture:
-			mining_power=Items.weapons[key].get("chopping power",1)
+			chopping_power=Items.weapons[key].get("chopping power",1)
 			break
 
-	var quantity:=max(1,randi()%mining_power+1)
+	var quantity:=max(1,randi()%chopping_power+1)
 
-	for body in mining_area.get_overlapping_bodies():
-		var item_data=null
-		if body.is_in_group("tree") or body.is_in_group("Tree"):
-			item_data=Items.resources["wood log"]
+	for body in chopping_area.get_overlapping_bodies():
+		if not body.has_method("gather"):
+			continue
 
-		if item_data:
+		var gathered_items=[]
+		
+		for group in body.get_groups():
+			var key=String(group).to_lower()
+			if Items.resources.has(key):
+				gathered_items.append({
+					"data": Items.resources[key],
+					"name": key
+				})
+
+		for item in gathered_items:
+			CommonBehaviours.addStackableItem(
+				inventory_grid,
+				item.data,
+				floating_text_parent,
+				quantity
+			)
+
+			chat.sendSystemMessage("Gathered %d %s."%[
+				quantity,
+				item.name
+			])
+
 			stats.getExperience(1)
-			CommonBehaviours.addStackableItem(inventory_grid,item_data,floating_text_parent,quantity)
+
+		body.gather()
 
 
 
+func gather()->void:
+	var chat:Control = $"../UI/Chat"
+	var inventory=parent.inventory
+	var inventory_grid=inventory.inventory_grid
+	var floating_text_parent=inventory.floating_text_parent
+	var gather_area:Area=$"../Turnable/Bash"
+	var stats=parent.stats
+	var quantity:=randi()%4+3
+	
+	for body in gather_area.get_overlapping_areas():
+		if !body.is_in_group("Plant"):
+			continue
 
+		var gathered_items=[]
 
+		for group in body.get_groups():
+			var key=String(group).to_lower()
+			if Items.resources.has(key):
+				gathered_items.append({
+					"data": Items.resources[key],
+					"name": key
+				})
 
+		if body.has_method("gather"):
+			body.gather()
 
+		for item in gathered_items:
+			CommonBehaviours.addStackableItem(
+				inventory_grid,
+				item.data,
+				floating_text_parent,
+				quantity
+			)
 
+			chat.sendSystemMessage("Gathered %d %s."%[
+				quantity,
+				item.name
+			])
+
+			stats.getExperience(3)
 
 
 
@@ -263,3 +332,15 @@ func loadAnimations():
 		file_name = dir.get_next()
 
 	dir.list_dir_end()
+
+func starttNonCombatAbility():
+	parent.is_in_combat = false
+func existNonCombatAbility():
+	parent.is_in_combat = false
+	parent.animation_tree.active = true
+	parent.animation_tree.set("parameters/IsInCombat/blend_amount", 0.0)
+	parent.animation_tree.set("parameters/CombatSwitch/blend_amount", 0.0)
+	parent.current_skill = ""
+	for key in parent.anim_locks:
+		parent.anim_locks[key] = false
+

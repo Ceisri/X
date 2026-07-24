@@ -1,10 +1,10 @@
 extends Control
 
-onready var close_button = $Close
-onready var reset_button = $Reset
-onready var player = $"../.."
-onready var stats = $"../../Stats"
-
+onready var close_button:TextureButton = $Close
+onready var reset_button:TextureButton = $Reset
+onready var player:KinematicBody = $"../.."
+onready var stats:Node = $"../../Stats"
+onready var skill_points_label:Label = $SkillPointsLabel
 onready var classes_container = $ClassesScrollContainer/ClassesGridContainer
 
 var selected_class_index:int = 0
@@ -19,15 +19,21 @@ func _ready()->void:
 
 	selectClass(0)
 
+func _physics_process(delta):
+	if Engine.get_physics_frames() % 26 == 0:
+		if visible == true:
+			skill_points_label.text = str(stats.skill_points)
+		
+
+
+
 func selectClass(index:int)->void:
 	selected_class_index = index
 
 	for holder_index in range(16):
 		get_node("SkillsTreeHolder"+str(holder_index+1)).visible = holder_index == index
 
-func _physics_process(delta):
-	if Input.is_action_just_pressed("skills"):
-		visible = !visible
+
 
 func resetSkills()->void:
 	var root = get_node("SkillsTreeHolder"+str(selected_class_index+1)).get_child(0)

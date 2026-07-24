@@ -19,9 +19,17 @@ func _ready():
 	increase_button.connect("pressed", self, "_on_increase_pressed")
 	decrease_button.connect("pressed", self, "_on_decrease_pressed")
 
-	attribute_names = stats.attributes.keys()
-
+	attribute_names=stats.attributes.keys()
 	updateUI()
+
+	call_deferred("saveDataBugPrevention")
+
+func saveDataBugPrevention():
+	for index in range(attribute_names.size()):
+		selected_index=index
+		decrease_button.emit_signal("pressed")
+		increase_button.emit_signal("pressed")
+
 
 func _process(_delta):
 	updateUI()

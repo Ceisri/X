@@ -36,8 +36,6 @@ func saveData():
 	file.store_line(str(savedQuantity))
 	file.close()
 
-	print(savePath)
-
 
 
 func loadData():

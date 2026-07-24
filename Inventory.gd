@@ -10,7 +10,7 @@ onready var split_button:TextureButton = $Tools/ToolGrid/Split
 onready var order_button:TextureButton = $Tools/ToolGrid/Order
 onready var debug_give_me_items =  $DebugGiveMeItems
 onready var inventory_grid =  $ScrollContainer/GridContainer
-
+onready var craft_control:Control = $"../Crafting"
 
 onready var shop:Control = $"../Shop"
 onready var shop_grid:GridContainer=  $"../Shop/ScrollContainer/GridContainer"
@@ -22,7 +22,7 @@ var last_pressed_index:int = -1
 var last_press_time:float = 0.0
 
 export var double_press_time:float = 0.4
-export var max_inventory_slots:int = 120
+export var max_inventory_slots:int = 132
 
 const SAVE_DIR = "user://Characters/"
 const SAVE_FILE = "/inventory.save"
@@ -56,18 +56,26 @@ func _physics_process(delta):
 			
 		
 	if Input.is_action_just_pressed("Inventory"):
-		visible = !visible
-		updateInventory()
-		autoFixStackables()
-
+		if player.is_writing == false:
+			visible = !visible
+			updateInventory()
+			autoFixStackables()
+	if visible == true:
+		if Input.is_action_just_pressed("craft"):
+			craft_control.visible = !craft_control.visible
+	else:
+		craft_control.visible = false
+			
 	if Input.is_action_just_pressed("interract"):
-		if !isMerchantNearby():
-			player.equipment.hide()
-			restoreBrokerItems()
-			clearCart()
-			shop.hide()
-			current_merchant_type=""
-			return
+		$"../Equipment".visible = false
+		if player.is_writing == false:
+			if !isMerchantNearby():
+				player.equipment.hide()
+				restoreBrokerItems()
+				clearCart()
+				shop.hide()
+				current_merchant_type=""
+				return
 
 		var merchant_type=findMerchant()
 
@@ -133,7 +141,7 @@ func findMerchant()->String:
 func restoreBrokerItems()->void:
 	if buy_button.visible:return
 
-	var item_sources=[Items.weapons,Items.armors,Items.flasks,Items.food,Items.necklaces,Items.rings]
+	var item_sources=[Items.resources,Items.weapons,Items.armors,Items.flasks,Items.food,Items.necklaces,Items.rings]
 
 	for shop_slot in shop_grid.get_children():
 		var slot_icon=shop_slot.get_node("Slot").texture
@@ -246,9 +254,7 @@ func shopPressed(index):
 		var quantity=int(slot.get_meta("quantity",1))
 		var item=null
 
-		var item_sources=[Items.weapons,Items.armors,Items.flasks,Items.food]
-
-		for source in item_sources:
+		for source in Items.categories:
 			for item_data in source.values():
 				if sameIcon(item_data["icon"],texture):
 					item=item_data.duplicate()
@@ -419,7 +425,7 @@ func sellItems()->void:
 		var quantity=int(shop_slot.get_meta("quantity",1))
 		var item=null
 
-		for list in [Items.food,Items.resources,Items.weapons,Items.rings,Items.necklaces,Items.armors,Items.flasks]:
+		for list in Items.categories:
 			for i in list.values():
 				if sameIcon(i["icon"],texture):
 					item=i
@@ -456,7 +462,7 @@ func updateTotalSellGain()->void:
 		var quantity=int(shop_slot.get_meta("quantity",1))
 		var item=null
 
-		for list in [Items.food,Items.resources,Items.weapons,Items.rings,Items.necklaces,Items.armors,Items.flasks]:
+		for list in Items.categories:
 			for i in list.values():
 				if sameIcon(i["icon"],texture):
 					item=i
@@ -659,7 +665,21 @@ func useItem(index):
 	var slot=inventory_grid.get_node("InventorySlot"+str(index))
 	var icon=slot.get_node("Slot")
 	if !icon.texture:return
+	
+	for resource_name in Items.resources:
+		var resource=Items.resources[resource_name]
+		if sameIcon(resource["icon"],icon.texture) and resource_name=="crafting book":
+			tween.stop_all()
+			tween.interpolate_property(icon,"rect_scale",Vector2.ONE,Vector2(0.9,0.9),0.08,Tween.TRANS_QUAD,Tween.EASE_OUT)
+			tween.interpolate_property(icon,"rect_scale",Vector2(0.9,0.9),Vector2.ONE,0.08,Tween.TRANS_QUAD,Tween.EASE_IN,0.08)
+			tween.start()
 
+			var recipes_book:Control=$"../Crafting/RecipeeBook"
+			player.crafting.visible=true
+			recipes_book.visible=!recipes_book.visible
+			return
+	
+	
 	for ring_name in Items.rings:
 		var ring=Items.rings[ring_name]
 		if !sameIcon(ring["icon"],icon.texture):
@@ -874,47 +894,41 @@ func combineSlot(index):
 	updateInventory()
 
 func autoFixStackables()->void:
-	var stacked_textures={}
-
 	for slot in inventory_grid.get_children():
 		var texture=slot.get_node("Slot").texture
-		if !texture:continue
+		if !texture:
+			continue
+
+		var item=getItemByIcon(texture.resource_path)
+
+		if !item:
+			continue
+
+		var is_stackable=true
+
+		if item.has("type") or item.has("scene") or item.has("carry"):
+			is_stackable=false
 
 		if isArmor(texture):
-			slot.stackable=false
-			continue
+			is_stackable=false
 
-		var is_weapon=false
-		for key in Items.weapons:
-			if sameIcon(Items.weapons[key]["icon"],texture):
-				is_weapon=true
+		for weapon_name in Items.weapons:
+			if sameIcon(Items.weapons[weapon_name]["icon"],texture):
+				is_stackable=false
 				break
 
-		if is_weapon:
-			slot.stackable=false
-			continue
+		slot.stackable=is_stackable
 
-		if slot.quantity>1:
-			stacked_textures[texture]=true
+		if !is_stackable:
+			if slot.quantity != 1:
+				slot.quantity=1
+		else:
+			if slot.quantity<=0:
+				slot.quantity=1
 
-	for slot in inventory_grid.get_children():
-		var texture=slot.get_node("Slot").texture
-		if !texture:continue
-
-		if isArmor(texture):
-			slot.stackable=false
-			continue
-
-		var is_weapon=false
-		for key in Items.weapons:
-			if sameIcon(Items.weapons[key]["icon"],texture):
-				is_weapon=true
-				break
-
-		if is_weapon:
-			slot.stackable=false
-		elif stacked_textures.has(texture):
-			slot.stackable=true
+		slot.displayQuantity()	
+			
+			
 func isArmor(texture)->bool:
 	for key in Items.armors:
 		if sameIcon(Items.armors[key]["icon"],texture):
@@ -1104,59 +1118,79 @@ func combinePressed()->void:
 
 	combine_mode = (combine_mode + 1) % 2
 func combine()->void:
-	var slots = inventory_grid.get_children()
+	var slots=inventory_grid.get_children()
 
 	for i in range(slots.size()):
-		var slot_a = slots[i]
-		var texture_a = slot_a.get_node("Slot").texture
-
-		if texture_a == null:
+		var slot_a=slots[i]
+		var texture_a=slot_a.get_node("Slot").texture
+		if !texture_a:
 			continue
 
-		var weapon_a = false
+		var path_a=""
+		if texture_a is Texture:
+			path_a=texture_a.resource_path
+		else:
+			path_a=str(texture_a)
+
+		var weapon_a=false
 		for key in Items.weapons:
-			if texture_a == Items.weapons[key]["icon"]:
-				weapon_a = true
+			var icon=Items.weapons[key]["icon"]
+			var path=""
+			if icon is Texture:
+				path=icon.resource_path
+			else:
+				path=str(icon)
+			if path_a==path:
+				weapon_a=true
 				break
 
 		if isArmor(texture_a) or weapon_a:
 			continue
 
-		for j in range(i + 1, slots.size()):
-			var slot_b = slots[j]
-			var texture_b = slot_b.get_node("Slot").texture
-
-			if texture_b == null:
+		for j in range(i+1,slots.size()):
+			var slot_b=slots[j]
+			var texture_b=slot_b.get_node("Slot").texture
+			if !texture_b:
 				continue
 
-			var weapon_b = false
+			var path_b=""
+			if texture_b is Texture:
+				path_b=texture_b.resource_path
+			else:
+				path_b=str(texture_b)
+
+			var weapon_b=false
 			for key in Items.weapons:
-				if texture_b == Items.weapons[key]["icon"]:
-					weapon_b = true
+				var icon=Items.weapons[key]["icon"]
+				var path=""
+				if icon is Texture:
+					path=icon.resource_path
+				else:
+					path=str(icon)
+				if path_b==path:
+					weapon_b=true
 					break
 
 			if isArmor(texture_b) or weapon_b:
 				continue
 
-			if texture_a != texture_b:
+			if path_a!=path_b:
 				continue
 
-			var max_quantity = max(slot_a.max_quantity, 9999999999)
-			var space_left = max_quantity - slot_a.quantity
-
-			if space_left <= 0:
+			var max_quantity=max(slot_a.max_quantity,9999999999)
+			var space_left=max_quantity-slot_a.quantity
+			if space_left<=0:
 				break
 
-			var amount_to_move = min(space_left, slot_b.quantity)
+			var amount_to_move=min(space_left,slot_b.quantity)
+			slot_a.stackable=true
+			slot_b.stackable=true
+			slot_a.quantity+=amount_to_move
+			slot_b.quantity-=amount_to_move
 
-			slot_a.stackable = true
-			slot_b.stackable = true
-			slot_a.quantity += amount_to_move
-			slot_b.quantity -= amount_to_move
-
-			if slot_b.quantity <= 0:
-				slot_b.quantity = 0
-				slot_b.get_node("Slot").texture = null
+			if slot_b.quantity<=0:
+				slot_b.quantity=0
+				slot_b.get_node("Slot").texture=null
 
 			slot_a.displayQuantity()
 			slot_b.displayQuantity()
@@ -1275,32 +1309,35 @@ func getRandItems()->void:
 		var t=c.get_node("Slot").texture
 		if t: has[t]=true
 
-	for w in Items.weapons.values():
-		if has.has(w["icon"]): continue
-		CommonBehaviours.addNotStackableItem(inventory_grid,w,floating_text_parent)
-		has[w["icon"]]=true
-		updateInventory()
-
-	for a in Items.armors.values():
-		if has.has(a["icon"]): continue
-		CommonBehaviours.addNotStackableItem(inventory_grid,a,floating_text_parent)
-		has[a["icon"]]=true
-		updateInventory()
-	for a in Items.rings.values():
-		if has.has(a["icon"]): continue
-		CommonBehaviours.addNotStackableItem(inventory_grid,a,floating_text_parent)
-		has[a["icon"]]=true
-		updateInventory()
-	for a in Items.necklaces.values():
-		if has.has(a["icon"]): continue
-		CommonBehaviours.addNotStackableItem(inventory_grid,a,floating_text_parent)
-		has[a["icon"]]=true
-		updateInventory()
+#	for w in Items.weapons.values():
+#		if has.has(w["icon"]): continue
+#		CommonBehaviours.addNotStackableItem(inventory_grid,w,floating_text_parent)
+#		has[w["icon"]]=true
+#		updateInventory()
+#
+#	for a in Items.armors.values():
+#		if has.has(a["icon"]): continue
+#		CommonBehaviours.addNotStackableItem(inventory_grid,a,floating_text_parent)
+#		has[a["icon"]]=true
+#		updateInventory()
+#	for a in Items.rings.values():
+#		if has.has(a["icon"]): continue
+#		CommonBehaviours.addNotStackableItem(inventory_grid,a,floating_text_parent)
+#		has[a["icon"]]=true
+#		updateInventory()
+#	for a in Items.necklaces.values():
+#		if has.has(a["icon"]): continue
+#		CommonBehaviours.addNotStackableItem(inventory_grid,a,floating_text_parent)
+#		has[a["icon"]]=true
+#		updateInventory()
 	var fk=Items.flasks.keys()
 	for i in range(20):
 		CommonBehaviours.addStackableItem(inventory_grid,Items.flasks[fk[i%fk.size()]],floating_text_parent,5)
 		updateInventory()
-		
+	var res=Items.resources.keys()
+	for i in range(20):
+		CommonBehaviours.addStackableItem(inventory_grid,Items.resources[res[i%res.size()]],floating_text_parent,500)
+		updateInventory()
 		
 func _on_inventory_slot_mouse_entered(index):
 	updateInventory()

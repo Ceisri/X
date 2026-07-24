@@ -3,7 +3,7 @@ extends Control
 onready var player = $"../.."
 onready var loot_grid = $ScrollContainer/GridContainer
 onready var loot_slot_holder = $ScrollContainer/GridContainer/LootSlot
-
+onready var inventory_grid = $"../Inventory/ScrollContainer/GridContainer"
 onready var area =  $"../../Turnable/Area"
 onready var close_button = $Close
 
@@ -25,11 +25,16 @@ func _physics_process(delta):
 		if visible:
 			autoFixStackables()
 	if Input.is_action_just_pressed("loot"):
-		var corpse = getDeadBodyInArea()
+		var corpse=getDeadBodyInArea()
 		updateSlots()
 
 		if corpse:
-			openCorpseLoot(corpse)
+			if visible and current_corpse==corpse:
+				updateSlots()
+				lootAll()
+			else:
+				openCorpseLoot(corpse)
+				updateSlots()
 		else:
 			hide()
 
@@ -45,7 +50,70 @@ func _physics_process(delta):
 		updateGrabbedCorpse()
 		
 		
+func lootAll()->void:
+	var free_slots=0
+	var stackable_icons={}
 
+	for slot in inventory_grid.get_children():
+		var texture=slot.get_node("Slot").texture
+		if texture:
+			stackable_icons[texture]=true
+		else:
+			free_slots+=1
+
+	for loot_slot in loot_grid.get_children():
+		var texture=loot_slot.get_node("Slot").texture
+		if !texture:
+			continue
+
+		var quantity=loot_slot.quantity
+		var item=null
+
+		for source in Items.categories:
+			for data in source.values():
+				if CommonBehaviours.sameIcon(data["icon"],texture):
+					item=data.duplicate()
+					item.icon=load(item.icon) if item.icon is String else item.icon
+					break
+			if item:
+				break
+
+		if !item:
+			continue
+
+		var stackable=!("type" in item) and !("scene" in item) and !("carry" in item)
+
+		if stackable:
+			if !stackable_icons.has(texture):
+				if free_slots<=0:
+					continue
+				free_slots-=1
+				stackable_icons[texture]=true
+
+			CommonBehaviours.addStackableItem(inventory_grid,item,player.inventory.floating_text_parent,quantity)
+			loot_slot.get_node("Slot").texture=null
+			loot_slot.quantity=0
+			loot_slot.displayQuantity()
+		else:
+			var moved=min(quantity,free_slots)
+			if moved<=0:
+				continue
+
+			for i in range(moved):
+				CommonBehaviours.addNotStackableItem(inventory_grid,item,player.inventory.floating_text_parent)
+
+			free_slots-=moved
+			loot_slot.quantity-=moved
+
+			if loot_slot.quantity<=0:
+				loot_slot.get_node("Slot").texture=null
+				loot_slot.quantity=0
+
+			loot_slot.displayQuantity()
+
+	saveCurrentCorpseLoot()
+	player.inventory.updateInventory()
+	player.inventory.autoFixStackables()
 func autoFixStackables()->void:
 	var stacked_textures={}
 

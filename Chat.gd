@@ -23,8 +23,13 @@ func _ready():
 	system_chatbox.text=""
 	chatbox.text=""
 	system_chatbox.hide()
+	line_edit.connect("text_changed",self,"writing")
+	line_edit.connect("focus_exited",self,"stopWriting")
+func writing(text)->void:
+	player.is_writing=true
 
-
+func stopWriting()->void:
+	player.is_writing=false
 func showsystemChat():
 	system_chatbox.show()
 	chatbox.hide()
