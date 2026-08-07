@@ -1,0 +1,278 @@
+#version 1.0.0.3
+# MobSync.gd
+extends Node
+var _mobs := {}
+var _cache_built := false
+export var sync_rate := 0.09
+export var cache_rebuild_interval := 2.0
+var _timer := 0.0
+var _cache_timer := 0.0
+func _ready() -> void:
+	get_tree().connect("network_peer_connected", self, "_on_peer_connected")
+func _physics_process(delta:float) -> void:
+	if get_tree().network_peer == null:
+		return
+	_cache_timer += delta
+	if !_cache_built or _cache_timer >= cache_rebuild_interval:
+		_cache_timer = 0.0
+		_buildCache()
+	if get_tree().is_network_server():
+		_timer += delta
+		if _timer >= sync_rate:
+			_timer = 0.0
+			_broadcastMobs(get_tree().get_network_connected_peers())
+func _buildCache() -> void:
+	_mobs.clear()
+	for mob in get_tree().get_nodes_in_group("Entity"):
+		if !is_instance_valid(mob):
+			continue
+		if !("movement_mode" in mob):
+			continue
+		_mobs[_mobKey(mob)] = mob
+	_cache_built = _mobs.size() > 0
+func _mobKey(mob:Node) -> String:
+	var world = _getMobWorld(mob)
+	if world:
+		return world.world_id + ":" + str(world.get_path_to(mob))
+	return str(mob.get_path())
+func _getWorldNode() -> Node:
+	var worlds = get_tree().get_nodes_in_group("World")
+	if worlds.size() > 0:
+		return worlds[0]
+	return null
+	
+	
+func _getMobWorld(mob:Node) -> Node:
+	var n = mob.get_parent()
+	while n:
+		if n.is_in_group("World") and "world_id" in n:
+			return n
+		n = n.get_parent()
+	return null
+
+
+
+
+
+	
+func _on_peer_connected(id:int) -> void:
+	if !get_tree().is_network_server():
+		return
+	call_deferred("_deferredSendMobBatch", id)
+
+func _deferredSendMobBatch(id:int) -> void:
+	if !get_tree().is_network_server():
+		return
+	if !get_tree().get_network_connected_peers().has(id):
+		return
+	_buildCache()
+	var payload = _buildPayload()
+	if !payload.empty():
+		rpc_id(id, "receiveMobBatch", payload)
+
+
+
+
+export var full_sync_interval := 10 # send stats/cooldowns/aggro every 10th tick (~1s) instead of every tick
+var _tick_count := 0
+
+func _broadcastMobs(peer_ids:Array) -> void:
+	if !_cache_built or peer_ids.empty():
+		return
+	_tick_count += 1
+	var send_full = (_tick_count % full_sync_interval == 0)
+	var payload = _buildPayload(send_full)
+	if payload.empty():
+		return
+	for id in peer_ids:
+		rpc_unreliable_id(id, "receiveMobBatch", payload)
+
+#func _buildPayload(include_full:bool = true) -> Array:
+#	var payload := []
+#	for mob_key in _mobs:
+#		var mob = _mobs[mob_key]
+#		if !is_instance_valid(mob):
+#			continue
+#		if mob.has_method("isRelevantForSync") and !mob.isRelevantForSync():
+#			continue
+#		var lock = -1
+#		if mob.has_method("getActiveAnimLock"):
+#			lock = mob.getActiveAnimLock()
+#
+#		var entry = {
+#			"n": mob_key,
+#			"pos": mob.global_transform.origin,
+#			"rot": mob.rotation.y,
+#			"mode": mob.movement_mode,
+#			"skill": mob.current_skill,
+#			"lock": lock,
+#			"dead": mob.is_dead,
+#		}
+#
+#		if include_full:
+#			var hp = 0; var maxhp = 0; var energy = 0; var maxenergy = 0
+#			var arcane = 0; var maxarcane = 0
+#			var statuses = {}; var debuffs = {}; var attrs = {}; var derived = {}
+#			var attr_points_spent = {}; var avail_points = 0
+#			if mob.stats:
+#				hp = mob.stats.health
+#				maxhp = mob.stats.max_health
+#				energy = mob.stats.energy
+#				maxenergy = mob.stats.max_energy
+#				arcane = mob.stats.arcane
+#				maxarcane = mob.stats.max_arcane
+#				statuses = mob.stats.statuses.duplicate(true)
+#				debuffs = mob.stats.debuff_buffs_active.duplicate(true)
+#				attrs = mob.stats.attributes.duplicate(true)
+#				derived = mob.stats.derived_stats.duplicate(true)
+#				attr_points_spent = mob.stats.attribute_points_spent.duplicate(true)
+#				avail_points = mob.stats.available_attribute_points
+#			var cooldowns = {}
+#			if "skill_cooldowns" in mob and mob.skill_cooldowns != null:
+#				cooldowns = mob.skill_cooldowns.duplicate()
+#
+#			entry["hp"] = hp; entry["maxhp"] = maxhp
+#			entry["e"] = energy; entry["maxe"] = maxenergy
+#			entry["arc"] = arcane; entry["maxarc"] = maxarcane
+#			entry["st"] = statuses; entry["db"] = debuffs
+#			entry["atr"] = attrs; entry["der"] = derived
+#			entry["aps"] = attr_points_spent; entry["avp"] = avail_points
+#			entry["cd"] = cooldowns
+#			entry["aggro"] = _buildMobAggroList(mob)
+#
+#		payload.append(entry)
+#	return payload
+#
+#
+
+# ===== MobSync.gd =====
+# In _buildPayload(): don't include hp/maxhp/etc for an entity whose Stats
+# node is still mid-reassert (_stats_stable == false). Broadcasting a
+# still-settling number is exactly what was locking bad health/energy/arcane
+# values into every client's puppet copy via _applyPuppetStats(). Skipping
+# the block just means that entity's health/energy/arcane on other peers
+# stays at its last-known-good value for a few more ticks until the
+# authoritative side finishes settling -- position/anim/etc keep syncing
+# normally either way.
+
+func _buildPayload(include_full:bool = true) -> Array:
+	var payload := []
+	for mob_key in _mobs:
+		var mob = _mobs[mob_key]
+		if !is_instance_valid(mob):
+			continue
+		if mob.has_method("isRelevantForSync") and !mob.isRelevantForSync():
+			continue
+		var lock = -1
+		if mob.has_method("getActiveAnimLock"):
+			lock = mob.getActiveAnimLock()
+
+		var entry = {
+			"n": mob_key,
+			"pos": mob.global_transform.origin,
+			"rot": mob.rotation.y,
+			"mode": mob.movement_mode,
+			"skill": mob.current_skill,
+			"lock": lock,
+			"dead": mob.is_dead,
+		}
+
+		var stats_stable = true
+		if mob.stats and ("_stats_stable" in mob.stats):
+			stats_stable = mob.stats._stats_stable
+
+		if include_full and stats_stable:
+			var hp = 0; var maxhp = 0; var energy = 0; var maxenergy = 0
+			var arcane = 0; var maxarcane = 0
+			var statuses = {}; var debuffs = {}; var attrs = {}; var derived = {}
+			var attr_points_spent = {}; var avail_points = 0
+			if mob.stats:
+				hp = mob.stats.health
+				maxhp = mob.stats.max_health
+				energy = mob.stats.energy
+				maxenergy = mob.stats.max_energy
+				arcane = mob.stats.arcane
+				maxarcane = mob.stats.max_arcane
+				statuses = mob.stats.statuses.duplicate(true)
+				debuffs = mob.stats.debuff_buffs_active.duplicate(true)
+				attrs = mob.stats.attributes.duplicate(true)
+				derived = mob.stats.derived_stats.duplicate(true)
+				attr_points_spent = mob.stats.attribute_points_spent.duplicate(true)
+				avail_points = mob.stats.available_attribute_points
+			var cooldowns = {}
+			if "skill_cooldowns" in mob and mob.skill_cooldowns != null:
+				cooldowns = mob.skill_cooldowns.duplicate()
+
+			entry["hp"] = hp; entry["maxhp"] = maxhp
+			entry["e"] = energy; entry["maxe"] = maxenergy
+			entry["arc"] = arcane; entry["maxarc"] = maxarcane
+			entry["st"] = statuses; entry["db"] = debuffs
+			entry["atr"] = attrs; entry["der"] = derived
+			entry["aps"] = attr_points_spent; entry["avp"] = avail_points
+			entry["cd"] = cooldowns
+			entry["aggro"] = _buildMobAggroList(mob)
+
+		payload.append(entry)
+	return payload
+
+
+
+
+
+
+
+func _buildMobAggroList(mob:Node) -> Array:
+	var aggro_list := []
+	if !mob.has_method("team_aggro"):
+		return aggro_list
+	for aggro_target in mob.team_aggro():
+		if !is_instance_valid(aggro_target.target_entity):
+			continue
+		aggro_list.append({
+			"name": aggro_target.target_entity.name,
+			"entity_name": (str(aggro_target.target_entity.entity_name) if "entity_name" in aggro_target.target_entity else "?"),
+			"aggro": aggro_target.aggro,
+			"time": aggro_target.last_aggro_time
+		})
+	return aggro_list
+
+remote func receiveMobBatch(payload:Array) -> void:
+	if get_tree().is_network_server():
+		return
+	if !_cache_built:
+		_buildCache()
+	for entry in payload:
+		var mob = _mobs.get(entry["n"])
+		if mob == null or !is_instance_valid(mob):
+			continue
+		if !mob.is_in_group("Player"):
+			mob.applyBruteForceSync(entry["pos"], entry["rot"], entry["mode"], entry["skill"], entry["lock"], entry["dead"])
+			if entry.has("cd") and mob.has_method("applyBruteForceCombatSync"):
+				mob.applyBruteForceCombatSync(entry.get("cd", {}), entry.get("aggro", []))
+		if mob.stats and entry.has("hp"):
+			mob.stats._has_received_stats_sync = true
+			mob.stats.net_health = entry["hp"]
+			mob.stats.net_max_health = entry["maxhp"]
+			mob.stats.net_energy = entry.get("e", mob.stats.net_energy)
+			mob.stats.net_max_energy = entry.get("maxe", mob.stats.net_max_energy)
+			mob.stats.net_arcane = entry.get("arc", mob.stats.net_arcane)
+			mob.stats.net_max_arcane = entry.get("maxarc", mob.stats.net_max_arcane)
+			mob.stats.net_statuses = entry.get("st", mob.stats.net_statuses)
+			mob.stats.net_debuff_buffs_active = entry.get("db", mob.stats.net_debuff_buffs_active)
+			mob.stats.net_attributes = entry.get("atr", mob.stats.net_attributes)
+			mob.stats.net_derived_stats = entry.get("der", mob.stats.net_derived_stats)
+			mob.stats.net_attribute_points_spent = entry.get("aps", mob.stats.net_attribute_points_spent)
+			mob.stats.net_available_attribute_points = entry.get("avp", mob.stats.net_available_attribute_points)
+			mob.stats.net_is_dead = entry["dead"]
+
+#forced resync entry point, and call it from World.gd
+remote func requestFullMobResync() -> void:
+	if !get_tree().is_network_server():
+		return
+	var sender_id = get_tree().get_rpc_sender_id()
+	if sender_id == 0:
+		return
+	_buildCache()
+	var payload = _buildPayload()
+	if !payload.empty():
+		rpc_id(sender_id, "receiveMobBatch", payload)
