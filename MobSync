@@ -66,7 +66,7 @@ func _deferredSendMobBatch(id:int) -> void:
 	if !get_tree().get_network_connected_peers().has(id):
 		return
 	_buildCache()
-	var payload = _buildPayload()
+	var payload = _buildPayload(true, true) # ignore_relevance = true: baseline catch-up
 	if !payload.empty():
 		rpc_id(id, "receiveMobBatch", payload)
 
@@ -76,6 +76,16 @@ func _deferredSendMobBatch(id:int) -> void:
 export var full_sync_interval := 10 # send stats/cooldowns/aggro every 10th tick (~1s) instead of every tick
 var _tick_count := 0
 
+#func _broadcastMobs(peer_ids:Array) -> void:
+#	if !_cache_built or peer_ids.empty():
+#		return
+#	_tick_count += 1
+#	var send_full = (_tick_count % full_sync_interval == 0)
+#	var payload = _buildPayload(send_full)
+#	if payload.empty():
+#		return
+#	for id in peer_ids:
+#		rpc_unreliable_id(id, "receiveMobBatch", payload)
 func _broadcastMobs(peer_ids:Array) -> void:
 	if !_cache_built or peer_ids.empty():
 		return
@@ -84,66 +94,22 @@ func _broadcastMobs(peer_ids:Array) -> void:
 	var payload = _buildPayload(send_full)
 	if payload.empty():
 		return
-	for id in peer_ids:
-		rpc_unreliable_id(id, "receiveMobBatch", payload)
 
-#func _buildPayload(include_full:bool = true) -> Array:
-#	var payload := []
-#	for mob_key in _mobs:
-#		var mob = _mobs[mob_key]
-#		if !is_instance_valid(mob):
-#			continue
-#		if mob.has_method("isRelevantForSync") and !mob.isRelevantForSync():
-#			continue
-#		var lock = -1
-#		if mob.has_method("getActiveAnimLock"):
-#			lock = mob.getActiveAnimLock()
-#
-#		var entry = {
-#			"n": mob_key,
-#			"pos": mob.global_transform.origin,
-#			"rot": mob.rotation.y,
-#			"mode": mob.movement_mode,
-#			"skill": mob.current_skill,
-#			"lock": lock,
-#			"dead": mob.is_dead,
-#		}
-#
-#		if include_full:
-#			var hp = 0; var maxhp = 0; var energy = 0; var maxenergy = 0
-#			var arcane = 0; var maxarcane = 0
-#			var statuses = {}; var debuffs = {}; var attrs = {}; var derived = {}
-#			var attr_points_spent = {}; var avail_points = 0
-#			if mob.stats:
-#				hp = mob.stats.health
-#				maxhp = mob.stats.max_health
-#				energy = mob.stats.energy
-#				maxenergy = mob.stats.max_energy
-#				arcane = mob.stats.arcane
-#				maxarcane = mob.stats.max_arcane
-#				statuses = mob.stats.statuses.duplicate(true)
-#				debuffs = mob.stats.debuff_buffs_active.duplicate(true)
-#				attrs = mob.stats.attributes.duplicate(true)
-#				derived = mob.stats.derived_stats.duplicate(true)
-#				attr_points_spent = mob.stats.attribute_points_spent.duplicate(true)
-#				avail_points = mob.stats.available_attribute_points
-#			var cooldowns = {}
-#			if "skill_cooldowns" in mob and mob.skill_cooldowns != null:
-#				cooldowns = mob.skill_cooldowns.duplicate()
-#
-#			entry["hp"] = hp; entry["maxhp"] = maxhp
-#			entry["e"] = energy; entry["maxe"] = maxenergy
-#			entry["arc"] = arcane; entry["maxarc"] = maxarcane
-#			entry["st"] = statuses; entry["db"] = debuffs
-#			entry["atr"] = attrs; entry["der"] = derived
-#			entry["aps"] = attr_points_spent; entry["avp"] = avail_points
-#			entry["cd"] = cooldowns
-#			entry["aggro"] = _buildMobAggroList(mob)
-#
-#		payload.append(entry)
-#	return payload
-#
-#
+	var combat_payload := []
+	var idle_payload := []
+	for entry in payload:
+		var mob = _mobs.get(entry["n"])
+		if is_instance_valid(mob) and ("target" in mob) and mob.target != null:
+			combat_payload.append(entry)
+		else:
+			idle_payload.append(entry)
+
+	for id in peer_ids:
+		if !combat_payload.empty():
+			rpc_id(id, "receiveMobBatch", combat_payload)
+		if !idle_payload.empty():
+			rpc_unreliable_id(id, "receiveMobBatch", idle_payload)
+
 
 # ===== MobSync.gd =====
 # In _buildPayload(): don't include hp/maxhp/etc for an entity whose Stats
@@ -155,13 +121,13 @@ func _broadcastMobs(peer_ids:Array) -> void:
 # authoritative side finishes settling -- position/anim/etc keep syncing
 # normally either way.
 
-func _buildPayload(include_full:bool = true) -> Array:
+func _buildPayload(include_full:bool = true, ignore_relevance:bool = false) -> Array:
 	var payload := []
 	for mob_key in _mobs:
 		var mob = _mobs[mob_key]
 		if !is_instance_valid(mob):
 			continue
-		if mob.has_method("isRelevantForSync") and !mob.isRelevantForSync():
+		if !ignore_relevance and mob.has_method("isRelevantForSync") and !mob.isRelevantForSync():
 			continue
 		var lock = -1
 		if mob.has_method("getActiveAnimLock"):
@@ -175,6 +141,7 @@ func _buildPayload(include_full:bool = true) -> Array:
 			"skill": mob.current_skill,
 			"lock": lock,
 			"dead": mob.is_dead,
+			"aid": (mob.attack_instance_id if "attack_instance_id" in mob else 0),
 		}
 
 		var stats_stable = true
@@ -199,6 +166,7 @@ func _buildPayload(include_full:bool = true) -> Array:
 				derived = mob.stats.derived_stats.duplicate(true)
 				attr_points_spent = mob.stats.attribute_points_spent.duplicate(true)
 				avail_points = mob.stats.available_attribute_points
+				
 			var cooldowns = {}
 			if "skill_cooldowns" in mob and mob.skill_cooldowns != null:
 				cooldowns = mob.skill_cooldowns.duplicate()
@@ -211,7 +179,6 @@ func _buildPayload(include_full:bool = true) -> Array:
 			entry["aps"] = attr_points_spent; entry["avp"] = avail_points
 			entry["cd"] = cooldowns
 			entry["aggro"] = _buildMobAggroList(mob)
-
 		payload.append(entry)
 	return payload
 
@@ -246,7 +213,7 @@ remote func receiveMobBatch(payload:Array) -> void:
 		if mob == null or !is_instance_valid(mob):
 			continue
 		if !mob.is_in_group("Player"):
-			mob.applyBruteForceSync(entry["pos"], entry["rot"], entry["mode"], entry["skill"], entry["lock"], entry["dead"])
+			mob.applyBruteForceSync(entry["pos"], entry["rot"], entry["mode"], entry["skill"], entry["lock"], entry["dead"], entry.get("aid", 0))
 			if entry.has("cd") and mob.has_method("applyBruteForceCombatSync"):
 				mob.applyBruteForceCombatSync(entry.get("cd", {}), entry.get("aggro", []))
 		if mob.stats and entry.has("hp"):
@@ -264,6 +231,10 @@ remote func receiveMobBatch(payload:Array) -> void:
 			mob.stats.net_attribute_points_spent = entry.get("aps", mob.stats.net_attribute_points_spent)
 			mob.stats.net_available_attribute_points = entry.get("avp", mob.stats.net_available_attribute_points)
 			mob.stats.net_is_dead = entry["dead"]
+
+
+
+
 
 #forced resync entry point, and call it from World.gd
 remote func requestFullMobResync() -> void:
