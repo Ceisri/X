@@ -1,4 +1,10 @@
-extends KinematicBody
+extends KinematicBody #Player.gd 
+
+
+const save_data_password := "kQ7$mZp2!____vLx9rT&eB4_____^wN8c___are_you_really_trying_to_crack_this_lock?J6#hY3@fD1*sG5%uA0~o_____R"
+
+
+
 onready var player_mesh = $character
 onready var animation =  $character/AnimationPlayer
 onready var anim_calls = $AnimationCalls
@@ -6,7 +12,7 @@ onready var character = $character
 onready var equipment =$UI/Equipment
 onready var skeleton = $character/root/Skeleton
 
-
+onready var ui_holder:Control = $UI
 onready var stats =$Stats
 onready var camroot = $Camroot
 onready var camera_v = $Camroot/h/v
@@ -16,10 +22,15 @@ onready var loot = $UI/Loot
 onready var inventory = $UI/Inventory
 onready var turnable:Spatial = $Turnable
 
-
+var pvp_enabled:bool = false
 var respawn_id:int = 0
 var entity_name = Global.selected_player_name
 export var sex:String = "female"
+puppet var net_sex := "male"
+
+
+
+var _last_applied_puppet_sex := ""
 var creator
 var spawned_bodies
 export var gravity = 9.8 
@@ -50,7 +61,86 @@ var root_motion_velocity := Vector3.ZERO
 var _last_root_motion_pos := Vector3.ZERO
 var is_climbing:bool= false
 onready var animation_tree:AnimationTree = $AnimationTree
+onready var _unique_animation_tree_root = _makeAnimationTreeRootUnique()
 onready var skill_anim = animation_tree.tree_root.get_node("Skill")
+
+# Guards every save path (World.gd.savePlayerData, saveRecursive's
+# saveData() call, everything) from writing this player's data to disk
+# until a full, successful load/restore has actually completed. Without
+# this, ANY transient bad spawn gets IMMORTALIZED the moment the next
+# periodic autosave fires and overwrites the real saved data with
+# whatever blank/zeroed state is currently sitting in this node.
+var data_fully_loaded := false
+# Only the server may flip this -- it's the single, authoritative signal
+# that every equipment/inventory/skillbar/stats/state snapshot has
+# actually landed on this client's own copy of its own player.
+remote func setDataFullyLoaded() -> void:
+	if get_tree().get_rpc_sender_id() != 1:
+		return
+	data_fully_loaded = true
+	_revealAfterLoad()
+
+
+# ===== Player.gd — new function, add anywhere at top level =====
+export var full_load_watchdog_timeout := 8.0
+var _watchdog_attempts := 0
+
+func _watchdogForFullLoad() -> void:
+	if !isLocalPlayer():
+		return
+	yield(get_tree().create_timer(full_load_watchdog_timeout), "timeout")
+	if !is_instance_valid(self) or !isLocalPlayer():
+		return
+	if data_fully_loaded:
+		return
+
+	_watchdog_attempts += 1
+
+	if get_tree().network_peer != null:
+		# Pull-based redundancy: actively ask the server to resend our
+		# own full snapshot instead of just hoping the original push
+		# arrives. Self-heals a dropped/lost initial RPC without the
+		# player needing to relog.
+		PlayerSpawner.rpc_id(1, "requestOwnFullSnapshot")
+
+	if _watchdog_attempts >= 3:
+		# Gave up after ~24s of retries. Reveal anyway -- being invisible
+		# forever is strictly worse than showing up with stale/default
+		# state -- but do NOT touch data_fully_loaded, so every save path
+		# (Player.gd.saveData, World.gd.savePlayerData,
+		# _savePositionsOnlyForAllPlayers) stays blocked and can never
+		# stomp the real saved data on disk with this broken session.
+		visible = true
+		set_physics_process(true)
+		if is_instance_valid(fullbody_collision): fullbody_collision.disabled = false
+		if is_instance_valid(upper_body_collision): upper_body_collision.disabled = false
+		if is_instance_valid(lower_body_collision): lower_body_collision.disabled = false
+		push_error("Player.gd: gave up waiting for full snapshot for " + entity_name + " -- revealed anyway, saves remain blocked")
+		return
+
+	call_deferred("_watchdogForFullLoad")
+
+
+func _makeAnimationTreeRootUnique():
+	if !_needsUniqueAnimationTree():
+		return false
+	if is_instance_valid(animation_tree) and animation_tree.tree_root != null:
+		animation_tree.tree_root = animation_tree.tree_root.duplicate(true)
+	return true
+
+func _needsUniqueAnimationTree() -> bool:
+	# duplicate(true) on the whole state-graph is expensive and was running
+	# for EVERY player, including the dedicated server's own invisible
+	# bookkeeping copies of every OTHER connected player -- a real per-spawn
+	# stall once several players were online.
+	if get_tree() == null:
+		return true
+	if get_tree().network_peer == null:
+		return true
+	if !get_tree().is_network_server():
+		return true
+	return isLocalPlayer()
+
 
 enum WeaponMode {
 	NONE,
@@ -61,37 +151,541 @@ enum WeaponMode {
 }
 var which_portal = ""
 var which_scene = ""
+
+
+
+#ONLINE ADDITION 
+var connection_status_active := false
+puppet var net_position := Vector3() setget _set_net_position
+func _set_net_position(value):
+	var now = OS.get_ticks_msec()
+	if _net_position_recv_time != 0:
+		var dt = (now - _net_position_recv_time) / 1000.0
+		if dt > 0.01:
+			_net_velocity_estimate = (value - _net_position_prev) / dt
+	_net_position_prev = value
+	_net_position_recv_time = now
+	net_position = value
+var _net_position_prev := Vector3()
+var _net_position_recv_time := 0
+var _net_velocity_estimate := Vector3()
+export var lag_compensation_max_extrapolation := 0.25
+export var lag_compensation_enabled := true
+puppet var net_rotation_y := 0.0
+puppet var net_character_rotation_y := 0.0
+puppet var net_turnable_rotation_y := 0.0
+puppet var net_movement_mode := "idle"
+puppet var net_current_skill := "none"
+puppet var net_weapons := 0
+puppet var net_is_in_combat := false
+puppet var net_moving := false
+puppet var net_direction := Vector3()
+puppet var net_active_lock := ""   # <-- NEW: mirrors getActiveAnimLock() from the master
+
+export var sync_rate := 0.04
+var sync_timer := 0.0
+export var puppet_lerp_speed := 18.0
+var _entity_initialized := false
+
+var _is_pooled_idle := false
+var _ready_complete := false
+#func _ready():
+#	_is_pooled_idle = has_meta("is_pooled_idle")
+#
+#	if !_is_pooled_idle:
+#		if entity_name == null or entity_name == "":
+#			entity_name = Global.selected_player_name
+#		if isLocalPlayer():
+#			Global.resetPlayerReady()
+#	$UI/Crafting/Smelting.hide()
+#	$character/root/Skeleton/Mesh.hide()
+#	direction=Vector3.BACK.rotated(Vector3.UP,$Camroot/h.global_transform.basis.get_euler().y)
+#	initializeAnimationBlends()
+#	if !_is_pooled_idle and isLocalPlayer():
+#		loadCharacterData()
+#		ApplySex()
+#		_forceLocalCameraCurrent(self)
+#	if is_instance_valid(character):
+#		character.hide()
+#	yield(get_tree(),"idle_frame")
+#	equipment.updateEquipment()
+#	yield(get_tree(),"idle_frame")
+#	for child in $UI/Skillbar/GridContainer.get_children():
+#		child.get_node("Slot").player=self
+#		child.get_node("TextureButton").parent=self
+#		child.get_node("Slot").loadData()
+#	if !_is_pooled_idle and isLocalPlayer():
+#		call_deferred("loadBoneData")
+#	yield(get_tree(),"idle_frame")
+#	_updateInputKeys()
+#	_cacheToolIcons()
+#	disableFallDamage()
+#	water_level_area.connect("area_shape_entered", self, "enterDeepWaters")
+#	water_level_area.connect("area_shape_exited", self, "exitDeepWaters")
+#	if !_is_pooled_idle:
+#		ui_holder.visible = isLocalPlayer()
+#		if isLocalPlayer():
+#			Network.connect("connection_lost", self, "_onConnectionLost")
+#			Network.connect("reconnect_attempt", self, "_onReconnectAttempt")
+#			Network.connect("reconnected", self, "_onReconnected")
+#			Network.connect("reconnect_failed", self, "_onReconnectFailedUI")
+#	reactivateAnimationTree()
+#	if !_is_pooled_idle and isLocalPlayer():
+#		yield(get_tree(),"idle_frame")
+#		yield(get_tree(),"idle_frame")
+#		Global.markPlayerReady()
+#		for i in range(30):
+#			yield(get_tree(),"idle_frame")
+#	if is_instance_valid(character):
+#		character.show()
+#	_ready_complete = true
+#
+
+
+# ===== Player.gd — _ready(), add entity_ready = false at top and
+# _markEntityReady() call at the very end =====
+
 func _ready():
-	match which_portal:
-		"mines":
-			translation.x = -5.243
-			translation.y = 1.101
-			translation.z = 13.625
-		"world":
-			translation.x = 22.5
-			translation.y = -16.349
-			translation.z = 41.371
-	entity_name = Global.selected_player_name
+	_is_pooled_idle = has_meta("is_pooled_idle")
+	entity_ready = false
+
+	if !_is_pooled_idle:
+		if entity_name == null or entity_name == "":
+			entity_name = Global.selected_player_name
+		if isLocalPlayer():
+			Global.resetPlayerReady()
 	$UI/Crafting/Smelting.hide()
 	$character/root/Skeleton/Mesh.hide()
+	direction=Vector3.BACK.rotated(Vector3.UP,$Camroot/h.global_transform.basis.get_euler().y)
+	initializeAnimationBlends()
+	if !_is_pooled_idle and isLocalPlayer():
+		loadCharacterData()
+		ApplySex()
+		_forceLocalCameraCurrent(self)
+	if is_instance_valid(character):
+		character.hide()
+	yield(get_tree(),"idle_frame")
 	equipment.updateEquipment()
+	yield(get_tree(),"idle_frame")
 	for child in $UI/Skillbar/GridContainer.get_children():
 		child.get_node("Slot").player=self
 		child.get_node("TextureButton").parent=self
 		child.get_node("Slot").loadData()
-	direction=Vector3.BACK.rotated(Vector3.UP,$Camroot/h.global_transform.basis.get_euler().y)
-	initializeAnimationBlends()
-	call_deferred("loadData")
-	loadCharacterData()
-	ApplySex()
+	if !_is_pooled_idle and isLocalPlayer():
+		call_deferred("loadBoneData")
 	yield(get_tree(),"idle_frame")
-	yield(get_tree(),"idle_frame")
-	call_deferred("loadBoneData")
 	_updateInputKeys()
 	_cacheToolIcons()
 	disableFallDamage()
 	water_level_area.connect("area_shape_entered", self, "enterDeepWaters")
 	water_level_area.connect("area_shape_exited", self, "exitDeepWaters")
+	if !_is_pooled_idle:
+		ui_holder.visible = isLocalPlayer()
+		if isLocalPlayer():
+			Network.connect("connection_lost", self, "_onConnectionLost")
+			Network.connect("reconnect_attempt", self, "_onReconnectAttempt")
+			Network.connect("reconnected", self, "_onReconnected")
+			Network.connect("reconnect_failed", self, "_onReconnectFailedUI")
+	reactivateAnimationTree()
+	if !_is_pooled_idle and isLocalPlayer():
+		yield(get_tree(),"idle_frame")
+		yield(get_tree(),"idle_frame")
+		Global.markPlayerReady()
+		for i in range(30):
+			yield(get_tree(),"idle_frame")
+	if is_instance_valid(character):
+		character.show()
+	_ready_complete = true
+	if !_is_pooled_idle:
+		_markEntityReady()
+
+
+
+
+
+func reinitializeForEntity(new_entity_name:String) -> void:
+	entity_name = new_entity_name
+	entity_ready = false
+	_is_pooled_idle = false
+	if has_meta("is_pooled_idle"):
+		remove_meta("is_pooled_idle")
+
+	if isLocalPlayer():
+		data_fully_loaded = false
+		visible = false
+		set_physics_process(false)
+		if is_instance_valid(fullbody_collision): fullbody_collision.disabled = true
+		if is_instance_valid(upper_body_collision): upper_body_collision.disabled = true
+		if is_instance_valid(lower_body_collision): lower_body_collision.disabled = true
+		var quest_system_reset = get_node_or_null("UI/QuestSystem")
+		if is_instance_valid(quest_system_reset) and quest_system_reset.has_method("hardResetForPool"):
+			quest_system_reset.hardResetForPool()
+		if is_instance_valid(inventory) and inventory.has_method("hardResetForPool"):
+			inventory.hardResetForPool()
+		if is_instance_valid(skillbar) and skillbar.has_method("hardResetForPool"):
+			skillbar.hardResetForPool()
+
+	while !_ready_complete:
+		yield(get_tree(), "idle_frame")
+
+	if isLocalPlayer():
+		Global.resetPlayerReady()
+
+	if isLocalPlayer():
+		loadCharacterData()
+		ApplySex()
+		_forceLocalCameraCurrent(self)
+		if is_instance_valid(skillbar) and skillbar.has_method("reinitializeAsLocalPlayer"):
+			skillbar.reinitializeAsLocalPlayer()
+	if is_instance_valid(character):
+		character.hide()
+
+	yield(get_tree(),"idle_frame")
+	equipment.updateEquipment()
+
+	if isLocalPlayer():
+		call_deferred("loadBoneData")
+
+	if is_instance_valid(inventory) and inventory.has_method("reinitializeUI"):
+		inventory.reinitializeUI()
+
+	ui_holder.visible = isLocalPlayer()
+	if isLocalPlayer():
+		if !Network.is_connected("connection_lost", self, "_onConnectionLost"):
+			Network.connect("connection_lost", self, "_onConnectionLost")
+		if !Network.is_connected("reconnect_attempt", self, "_onReconnectAttempt"):
+			Network.connect("reconnect_attempt", self, "_onReconnectAttempt")
+		if !Network.is_connected("reconnected", self, "_onReconnected"):
+			Network.connect("reconnected", self, "_onReconnected")
+		if !Network.is_connected("reconnect_failed", self, "_onReconnectFailedUI"):
+			Network.connect("reconnect_failed", self, "_onReconnectFailedUI")
+
+	reactivateAnimationTree()
+
+	if isLocalPlayer():
+		yield(get_tree(),"idle_frame")
+		yield(get_tree(),"idle_frame")
+		Global.markPlayerReady()
+		call_deferred("_watchdogForFullLoad")
+
+	if is_instance_valid(character):
+		character.show()
+
+	_markEntityReady()
+
+
+
+
+# Called directly by _ready() for a freshly-instanced (non-pooled) player,
+# and explicitly by PlayerSpawner._doSpawnPlayer() for a pooled node that
+# just had its entity_name assigned -- since _ready() itself already ran
+# (with entity_name=="") back when the node was pooled and never fires again.
+func _initializeAsEntity() -> void:
+	if _entity_initialized:
+		return
+	_entity_initialized = true
+
+	ui_holder.visible = isLocalPlayer()
+	if isLocalPlayer():
+		_forceLocalCameraCurrent(self)
+	else:
+		_forceCamerasNotCurrent(self)
+
+	if isLocalPlayer():
+		visible = false
+		set_physics_process(false)
+		if is_instance_valid(fullbody_collision): fullbody_collision.disabled = true
+		if is_instance_valid(upper_body_collision): upper_body_collision.disabled = true
+		if is_instance_valid(lower_body_collision): lower_body_collision.disabled = true
+		data_fully_loaded = false
+		Global.resetPlayerReady()
+
+	$UI/Crafting/Smelting.hide()
+	$character/root/Skeleton/Mesh.hide()
+	direction=Vector3.BACK.rotated(Vector3.UP,$Camroot/h.global_transform.basis.get_euler().y)
+	initializeAnimationBlends()
+	if isLocalPlayer():
+		loadCharacterData()
+		ApplySex()
+	else:
+		_forceCamerasNotCurrent(self)
+
+	if is_instance_valid(character):
+		character.hide()
+
+	yield(get_tree(),"idle_frame")
+	equipment.updateEquipment()
+	yield(get_tree(),"idle_frame")
+	for child in $UI/Skillbar/GridContainer.get_children():
+		child.get_node("Slot").player=self
+		child.get_node("TextureButton").parent=self
+		child.get_node("Slot").loadData()
+	if isLocalPlayer():
+		call_deferred("loadBoneData")
+	yield(get_tree(),"idle_frame")
+	_updateInputKeys()
+	_cacheToolIcons()
+	disableFallDamage()
+	water_level_area.connect("area_shape_entered", self, "enterDeepWaters")
+	water_level_area.connect("area_shape_exited", self, "exitDeepWaters")
+	if isLocalPlayer():
+		if !Network.is_connected("connection_lost", self, "_onConnectionLost"):
+			Network.connect("connection_lost", self, "_onConnectionLost")
+		if !Network.is_connected("reconnect_attempt", self, "_onReconnectAttempt"):
+			Network.connect("reconnect_attempt", self, "_onReconnectAttempt")
+		if !Network.is_connected("reconnected", self, "_onReconnected"):
+			Network.connect("reconnected", self, "_onReconnected")
+		if !Network.is_connected("reconnect_failed", self, "_onReconnectFailedUI"):
+			Network.connect("reconnect_failed", self, "_onReconnectFailedUI")
+	reactivateAnimationTree()
+
+	if isLocalPlayer():
+		yield(get_tree(),"idle_frame")
+		yield(get_tree(),"idle_frame")
+		Global.markPlayerReady()
+
+	if is_instance_valid(character):
+		character.show()
+
+func _revealAfterLoad() -> void:
+	if !isLocalPlayer():
+		return
+	visible = true
+	if is_suspended:
+		return
+	set_physics_process(true)
+	if is_instance_valid(fullbody_collision): fullbody_collision.disabled = false
+	if is_instance_valid(upper_body_collision): upper_body_collision.disabled = false
+	if is_instance_valid(lower_body_collision): lower_body_collision.disabled = false
+var is_suspended := false
+
+#func setSuspended(suspended:bool) -> void:
+#	is_suspended = suspended
+#	if suspended:
+#		data_fully_loaded = false
+#	visible = !suspended
+#	if is_instance_valid(fullbody_collision): fullbody_collision.disabled = suspended
+#	if is_instance_valid(upper_body_collision): upper_body_collision.disabled = suspended
+#	if is_instance_valid(lower_body_collision): lower_body_collision.disabled = suspended
+#	set_physics_process(!suspended)
+#	ui_holder.visible = !suspended and isLocalPlayer()
+
+# ===== Player.gd — replace setSuspended() =====
+func setSuspended(suspended:bool) -> void:
+	is_suspended = suspended
+
+	if suspended:
+		data_fully_loaded = false
+		visible = false
+		if is_instance_valid(fullbody_collision): fullbody_collision.disabled = true
+		if is_instance_valid(upper_body_collision): upper_body_collision.disabled = true
+		if is_instance_valid(lower_body_collision): lower_body_collision.disabled = true
+		set_physics_process(false)
+		ui_holder.visible = false
+		return
+
+	# UNSUSPENDING: this used to reveal + enable physics IMMEDIATELY here,
+	# before any real snapshot (equipment/inventory/skillbar/stats/position)
+	# had actually landed on this node. That's the root cause of every
+	# symptom reported: physics started ticking (gravity, movement,
+	# save-blocking checks) on a blank/pooled node sitting at whatever
+	# transform the pool left it at, ran for however many frames it took
+	# the snapshot RPC to arrive, and by the time the real data DID land,
+	# the player had already fallen/moved away from -- or the saved
+	# position write raced against -- the correct spot. Equipment "worked"
+	# only because it's also applied authoritatively/synchronously
+	# server-side in the same call that spawns the node; nothing else was.
+	#
+	# Now: for the LOCAL player, staying frozen+invisible is the ONLY
+	# state entered here. The ONE place allowed to actually reveal a local
+	# player is _revealAfterLoad(), and that only ever runs once real data
+	# has been applied (data_fully_loaded == true). Puppets (other
+	# players) still reveal immediately as before -- there's no "our own
+	# data" race for a puppet, its state streams in continuously anyway.
+	if isLocalPlayer():
+		data_fully_loaded = false
+		visible = false
+		if is_instance_valid(fullbody_collision): fullbody_collision.disabled = true
+		if is_instance_valid(upper_body_collision): upper_body_collision.disabled = true
+		if is_instance_valid(lower_body_collision): lower_body_collision.disabled = true
+		set_physics_process(false)
+		ui_holder.visible = false
+	else:
+		visible = true
+		if is_instance_valid(fullbody_collision): fullbody_collision.disabled = false
+		if is_instance_valid(upper_body_collision): upper_body_collision.disabled = false
+		if is_instance_valid(lower_body_collision): lower_body_collision.disabled = false
+		set_physics_process(true)
+		ui_holder.visible = false
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+func applyStateSnapshotAuthority(data:Dictionary) -> void:
+	if data.empty():
+		return
+	_applyStateSnapshotDirect(data)
+
+func _syncToPuppets(delta) -> void:
+	if get_tree().network_peer == null:
+		return
+	if !isLocalPlayer():
+		return
+	sync_timer += delta
+	if sync_timer < sync_rate:
+		return
+	sync_timer = 0.0
+
+	rset_unreliable("net_position", translation)
+	rset_unreliable("net_rotation_y", rotation.y)
+	if is_instance_valid(player_mesh):
+		rset_unreliable("net_character_rotation_y", player_mesh.rotation.y)
+	if is_instance_valid(turnable):
+		rset_unreliable("net_turnable_rotation_y", turnable.rotation.y)
+	rset_unreliable("net_movement_mode", movement_mode)
+	rset_unreliable("net_current_skill", current_skill)
+	rset_unreliable("net_weapons", weapons)
+	rset_unreliable("net_is_in_combat", is_in_combat)
+	rset_unreliable("net_moving", moving)
+	rset_unreliable("net_direction", direction)
+	rset_unreliable("net_active_lock", getActiveAnimLock())  
+	rset_unreliable("net_sex", stats.sex)
+	
+# ============================================================
+# Player.gd — add net_is_downed puppet var + apply it in _applyPuppetState(),
+# plus the applyPuppetDownedState() entry point Stats.gd now calls.
+# Fixes "standing instead of downed": is_downed was a purely local flag
+# only ever set on the SERVER's authoritative copy of a player node
+# (inside Stats.getKilled()) -- it never had any sync path to puppets on
+# other clients at all, so their render always showed the player idle.
+# ============================================================
+puppet var net_is_downed := false
+
+#func applyPuppetDownedState(downed:bool) -> void:
+#	if isLocalPlayer():
+#		return
+#	if net_is_downed == downed:
+#		return
+#	net_is_downed = downed
+#	if downed:
+#		anim_locks["downed"] = true
+#		current_skill = "downed"
+#	else:
+#		anim_locks["downed"] = false
+#		anim_locks["get up"] = true
+# ============================================================
+# Player.gd — receivePuppetStatsPush's applyPuppetDownedState() no longer
+# needs to touch anim_locks/current_skill (that was the inert no-op fix
+# from before — getActiveAnimLock() ignores anim_locks for puppets and
+# reads net_active_lock only, which now arrives correctly from the real
+# owner via the Stats.gd fix above). Keep this only to update the plain
+# is_downed flag for any non-animation logic that reads it directly.
+# ============================================================
+
+func applyPuppetDownedState(downed:bool) -> void:
+	if isLocalPlayer():
+		return
+	net_is_downed = downed
+func _applyPuppetState(delta) -> void:
+	if _shouldAnimateLocally():
+		animation_tree.active = true
+	if net_sex != _last_applied_puppet_sex:
+		_last_applied_puppet_sex = net_sex
+		stats.sex = net_sex
+		if _shouldAnimateLocally():
+			ApplySex()
+#	translation = translation.linear_interpolate(net_position, delta * puppet_lerp_speed)
+	var extrapolated_position = net_position
+	if lag_compensation_enabled and _net_position_recv_time != 0:
+		var elapsed = (OS.get_ticks_msec() - _net_position_recv_time) / 1000.0
+		elapsed = min(elapsed, lag_compensation_max_extrapolation)
+		extrapolated_position = net_position + _net_velocity_estimate * elapsed
+	translation = translation.linear_interpolate(extrapolated_position, delta * puppet_lerp_speed)
+	
+	rotation.y = lerp_angle(rotation.y, net_rotation_y, delta * puppet_lerp_speed)
+
+	if is_instance_valid(player_mesh):
+		player_mesh.rotation.y = lerp_angle(player_mesh.rotation.y, net_character_rotation_y, delta * puppet_lerp_speed)
+	if is_instance_valid(turnable):
+		turnable.rotation.y = lerp_angle(turnable.rotation.y, net_turnable_rotation_y, delta * puppet_lerp_speed)
+
+	movement_mode = net_movement_mode
+	current_skill = net_current_skill
+	weapons = net_weapons
+	is_in_combat = net_is_in_combat
+	moving = net_moving
+	direction = net_direction
+	is_downed = net_is_downed # <-- was never assigned for puppets before
+	if is_instance_valid(equipment) and equipment.has_method("_applyPuppetEquipmentIfChanged"):
+		equipment._applyPuppetEquipmentIfChanged()
+
+	
+	
+	
+func _onConnectionLost() -> void:
+	connection_status_active = true
+	chat.sendSystemMessage("Losing connection to server...")
+	var label:Label = $UI/ResourceDetectionLabel
+	label.visible = true
+	label.text = "Losing connection..."
+	_forceLocalCameraCurrent(self)
+
+func _onReconnectAttempt(attempt:int) -> void:
+	connection_status_active = true
+	var label:Label = $UI/ResourceDetectionLabel
+	label.visible = true
+	label.text = "Reconnecting... (attempt " + str(attempt) + ")"
+	_forceLocalCameraCurrent(self)
+
+func _onReconnected() -> void:
+	connection_status_active = false
+	chat.sendSystemMessage("Reconnected to server")
+	var label:Label = $UI/ResourceDetectionLabel
+	label.visible = false
+	label.text = ""
+
+func _onReconnectFailedUI() -> void:
+	chat.sendSystemMessage("Could not reconnect to server")
+	var label:Label = $UI/ResourceDetectionLabel
+	label.visible = true
+	label.text = "Connection lost"
+	_giveUpAndReturnToMenu()
+
+func _giveUpAndReturnToMenu() -> void:
+	set_physics_process(false)
+	visible = false
+	if is_instance_valid(fullbody_collision): fullbody_collision.disabled = true
+	if is_instance_valid(upper_body_collision): upper_body_collision.disabled = true
+	if is_instance_valid(lower_body_collision): lower_body_collision.disabled = true
+	ui_holder.visible = false
+	if get_tree().network_peer != null:
+		get_tree().network_peer = null
+	get_tree().change_scene("res://PreCharacterCreation.tscn")
+		
+
+
+
+
+
+
+
+
+func isLocalPlayer() -> bool:
+	return entity_name != "" and entity_name == Global.selected_player_name
 
 var weapons:int = WeaponMode.NONE
 
@@ -367,6 +961,7 @@ var skill_animations = {
 		WeaponMode.TWO_HANDED:"Berserk_Raze_TwoHanded",
 	},
 	"reckless":{
+		WeaponMode.NONE:"Buff_OneHanded",
 		WeaponMode.SWORD:"Buff_OneHanded",
 		WeaponMode.DUAL:"Buff_OneHanded",
 		WeaponMode.SHIELD:"Buff_OneHanded",
@@ -534,11 +1129,17 @@ func activateAnimLock(lock_name:String)->void:
 		current_skill = lock_name
 
 func getActiveAnimLock()->String:
+	if !isLocalPlayer():
+		# Puppets never populate anim_locks (only movement_mode/current_skill/etc.
+		# get synced), so without this they'd always read "" here and skill
+		# animations (setSkillAnimation) would never trigger for other players.
+		return net_active_lock
+
 	var active_locks=[]
 	for lock_name in anim_locks:
 		if anim_locks[lock_name]:
 			active_locks.append(lock_name)
-	 $UI/Chat/debug.text=", ".join(active_locks)  
+	$UI/Chat/debug.text=", ".join(active_locks)
 	if active_locks.size()>0:
 		return active_locks[0]
 	return ""
@@ -645,6 +1246,8 @@ func setAnimBlend(path:String, target:float, speed:float, delta:float) -> void:
 	anim_blend_cache[path] = current
 	animation_tree.set(path, current)
 func initializeAnimationBlends() -> void:
+	if !_shouldAnimateLocally():
+		return
 	var blendPaths:Array = [
 		"parameters/CombatSwitch/blend_amount",
 		"parameters/MeleeSkillSwitch/blend_amount",
@@ -658,16 +1261,12 @@ func initializeAnimationBlends() -> void:
 		"parameters/IsInCombat/blend_amount",
 		"parameters/SkillBlend/blend_amount"
 	]
-
 	anim_blend_cache.clear()
-
 	for path in blendPaths:
 		var value = animation_tree.get(path)
-
 		if value == null:
 			print("Player.gd initializeAnimationBlends(): AnimBlend init warning: missing AnimationTree path: ", path)
 			value = 0.0
-
 		anim_blend_cache[path] = float(value)
 
 func safeGetBlend(path:String) -> float:
@@ -720,15 +1319,55 @@ func setRunAnimation()->void:
 	if !combat_run_animations.has(weapons):
 		return
 	var anim = combat_run_animations[weapons]
-
 	run_node.animation = anim
+func reactivateAnimationTree() -> void:
+	if !is_instance_valid(animation_tree):
+		return
+
+	if is_instance_valid(player_mesh):
+		var anim_player = player_mesh.get_node_or_null("AnimationPlayer")
+		if anim_player:
+			if animation_tree.has_method("set_animation_player"):
+				animation_tree.call("set_animation_player", anim_player.get_path())
+			else:
+				animation_tree.set("anim_player", anim_player.get_path())
+
+	animation_tree.active = false
+	animation_tree.active = true
+
+
+
+
+
+
+var water:float = -1.0
+var land:float = 0.0
+var air:float = 1.0
+var climbing:float = 0.0
+var falling:float = 1.0
+
+
+
+func _shouldAnimateLocally() -> bool:
+	# On a dedicated/headless server, every connected player's Player node
+	# exists purely for authoritative bookkeeping (Stats/inventory/etc) --
+	# nothing about it is ever rendered, so evaluating a full AnimationTree
+	# blend graph for it every physics tick was pure waste and the actual
+	# cause of the server CPU spiking under load. Real clients (including
+	# a player who is also hosting) still need full animation for every
+	# OTHER player they can see -- only the server's own non-rendered
+	# copies get skipped here.
+	if get_tree().network_peer == null:
+		return true # offline, single machine, always render
+	if !get_tree().is_network_server():
+		return true # we're a client -- every Player node we have exists to be seen
+	return isLocalPlayer() # server: only animate its own hosted player, if any
+
 
 var skillExitBlendSpeed:float = 2.0
-
 func animationOrder() -> void:
 	if stats.debuff_buffs_active.has("stunned") and float(stats.debuff_buffs_active["stunned"].get("duration",0.0)) > 0.0:
 		animation_tree.set("parameters/CombatSwitch/blend_amount", 0.0)
-		animation_tree.set("parameters/MovementType/blend_amount", 0.0)
 		animation_tree.set("parameters/CrouchOrNot/blend_amount", 1.0)
 		animation_tree.set("parameters/Movement/blend_amount", -1.0)
 		animation_tree.set("parameters/IsInCombat/blend_amount", 0.0)
@@ -751,7 +1390,7 @@ func animationOrder() -> void:
 	if speed_factor_walk > 1.0:
 		speed_factor_walk = 1.0 + sqrt(speed_factor_walk - 1.0) * 0.5
 	animation_tree.set("WalkSpeed", speed_factor_walk)
-	var speed_factor_run = max(0.0, stats.run_speed / 15.5)
+	var speed_factor_run = max(0.0, (stats.run_speed * lerp(1.0, run_max_speed_multiplier, clamp(current_run_time / run_ramp_time, 0.0, 1.0))) / 15.5)
 	if speed_factor_run > 1.0:
 		speed_factor_run = 1.0 + (speed_factor_run - 1.0) * 0.25
 	animation_tree.set("RunSpeed", speed_factor_run)
@@ -798,12 +1437,8 @@ func animationOrder() -> void:
 		# Leave combat state smoothly.
 		# ------------------------------------------------------------
 
-		if flip_blend_timer > 0.0:
-			animation_tree.set("parameters/CombatSwitch/blend_amount",1.0)
-			animation_tree.set("parameters/MeleeSkillSwitch/blend_amount",1.0)
-		else:
-			animation_tree.set("parameters/CombatSwitch/blend_amount",0.0)
-			animation_tree.set("parameters/MeleeSkillSwitch/blend_amount",0.0)
+		animation_tree.set("parameters/CombatSwitch/blend_amount",0.0)
+		animation_tree.set("parameters/MeleeSkillSwitch/blend_amount",0.0)
 
 		# ============================================================
 		# TARGET VALUES
@@ -823,17 +1458,17 @@ func animationOrder() -> void:
 		# AIRBORNE STATE
 		# ============================================================
 		if is_airborne and !is_climbing and !is_swimming:
-			movement_type_target=1.0
-			vertical_target=1.0
+			pass
 
 		else:
+			animation_tree.set("parameters/WaterLandAir/blend_amount",land)
+			animation_tree.set("parameters/ClimbingOrFalling/blend_amount",falling)
 			if is_dead == true:
 				return
 			# ========================================================
 			# MOVEMENT STATE MACHINE
 			# ========================================================
 			match movement_mode:
-
 				# ----------------------------------------------------
 				# IDLE
 				# ----------------------------------------------------
@@ -847,9 +1482,11 @@ func animationOrder() -> void:
 
 						else:
 							setAnimBlend("parameters/IsInCombat/blend_amount",0.0,blend,delta)
+							animation_tree.set("parameters/WaterLandAir/blend_amount",land)
 					else:
 						setAnimBlend("parameters/IsAlive/blend_amount",0.0,blend,delta)
 						setAnimBlend("parameters/Downed/blend_amount",0.0,blend,delta)
+						animation_tree.set("parameters/WaterLandAir/blend_amount",land)
 				# ----------------------------------------------------
 				# WALK
 				# ----------------------------------------------------
@@ -859,12 +1496,15 @@ func animationOrder() -> void:
 						setAnimBlend("parameters/IsAlive/blend_amount",1.0,blend,delta)
 						if is_in_combat == true:
 							animation_tree.set("parameters/WalkCombatOrNot/blend_amount",1)
+							animation_tree.set("parameters/WaterLandAir/blend_amount",land)
 							setCombatWalkAnimation()
 						else:
 							animation_tree.set("parameters/WalkCombatOrNot/blend_amount",0)
+							animation_tree.set("parameters/WaterLandAir/blend_amount",land)
 					else:
 						setAnimBlend("parameters/IsAlive/blend_amount",0.0,blend,delta)
 						setAnimBlend("parameters/Downed/blend_amount",1.0,blend,delta)
+						animation_tree.set("parameters/WaterLandAir/blend_amount",land)
 				# ----------------------------------------------------
 				# RUN
 				# ----------------------------------------------------
@@ -873,8 +1513,10 @@ func animationOrder() -> void:
 						if is_in_combat == true: 
 							setRunAnimation()
 							animation_tree.set("parameters/IsInCombatRun/blend_amount",1)
+							animation_tree.set("parameters/WaterLandAir/blend_amount",land)
 						else:
 							animation_tree.set("parameters/IsInCombatRun/blend_amount",0)
+							animation_tree.set("parameters/WaterLandAir/blend_amount",land)
 						movement_target=1.0
 						animation_tree.set("parameters/RunSpeed/scale",0.8+(0.0125*stats.run_speed))
 						
@@ -886,6 +1528,7 @@ func animationOrder() -> void:
 					crouch_mode_target=0.0
 					animation_tree.set("parameters/CrouchMov/blend_amount",0)
 					animation_tree.set("parameters/IsInCombatRun/blend_amount",0)
+					animation_tree.set("parameters/WaterLandAir/blend_amount",land)
 				# ----------------------------------------------------
 				# CROUCH MOVEMENT
 				# ----------------------------------------------------
@@ -894,6 +1537,7 @@ func animationOrder() -> void:
 					crouch_mode_target=1.0
 					animation_tree.set("parameters/CrouchMov/blend_amount",1)
 					animation_tree.set("parameters/IsInCombatRun/blend_amount",0)
+					animation_tree.set("parameters/WaterLandAir/blend_amount",0)
 				# ----------------------------------------------------
 				# CLIMB
 				# ----------------------------------------------------
@@ -916,13 +1560,14 @@ func animationOrder() -> void:
 				"swimming":
 					movement_type_target=-1.0
 					water_target=1.0
-
+					animation_tree.set("parameters/WaterLandAir/blend_amount",water)
 					animation_tree.set("parameters/SwimSpeed/scale",0.97+(0.03*stats.derived_stats["swim_speed"]))
 
 				# ----------------------------------------------------
 				# TREADING WATER
 				# ----------------------------------------------------
 				"treading water":
+					animation_tree.set("parameters/WaterLandAir/blend_amount",water)
 					movement_type_target=-1.0
 					water_target=0.0
 		# ============================================================
@@ -932,15 +1577,12 @@ func animationOrder() -> void:
 		# This prevents snapping between animation states.
 		# ============================================================
 		setAnimBlend("parameters/Movement/blend_amount",movement_target,8.0,delta)
-		setAnimBlend("parameters/MovementType/blend_amount",movement_type_target,8.0,delta)
-
+		setAnimBlend("parameters/Vertical/blend_amount",vertical_target,8.0,delta) 
 
 		setAnimBlend("parameters/CrouchOrNot/blend_amount",crouch_target,8.0,delta)
 		setAnimBlend("parameters/CrouchMode/blend_amount",crouch_mode_target,8.0,delta)
 		setAnimBlend("parameters/climbPoint/blend_amount",climb_target,8.0,delta)
 		setAnimBlend("parameters/Water/blend_amount",water_target,8.0,delta)
-
-
 
 
 
@@ -1013,7 +1655,7 @@ func dodgeMessage()->void:
 		if "entity_name" in body and body.entity_name != "nameless":
 			message += body.entity_name
 		else:
-			message += body.species
+			message += body.stats.species
 
 		message += " " + skill_name
 		chat.sendSystemMessage(message)
@@ -1084,6 +1726,8 @@ func _cacheToolIcons():
 
 
 func detectGathering() -> void:
+	if connection_status_active:
+		return
 	var label:Label = $UI/ResourceDetectionLabel
 	label.visible = false
 	label.text = ""
@@ -1163,90 +1807,165 @@ func _handleGatherTarget(target, label:Label) -> bool:
 				return true
 
 	return true
-#func _handleGatherTarget(target, label:Label) -> bool:
-#	if !is_instance_valid(target) or !target.is_in_group("Resource"):
-#		return false
-#
-#	if current_skill != "mine" and current_skill != "gather" and current_skill != "chop":
-#		label.visible = true
-#		label.text = "Press " + harvest_key + " to Harvest"
-#
-#	if !Input.is_action_just_pressed("Harvest"):
-#		return true
-#
-#	forceRotationTowardsTarget(target)
-#
-#	var main_hand = $"UI/Equipment/MainHand/Slot".texture
-#	var inventory = $UI/Inventory/ScrollContainer/GridContainer
-#
-#	for group in target.get_groups():
-#		match group.to_lower():
-#			"plant":
-#				skillbar.castSkill("gather")
-#				return true
-#
-#			"rock", "iron", "gold":
-#				if main_hand in mining_icons:
-#					skillbar.castSkill("mine")
-#					return true
-#
-#				for child in inventory.get_children():
-#					var slot = child.get_node_or_null("Slot")
-#					if slot and slot.texture in mining_icons:
-#						skillbar.castSkill("mine")
-#						return true
-#
-#			"tree":
-#				if main_hand in chopping_icons:
-#					skillbar.castSkill("chop")
-#					return true
-#
-#				for child in inventory.get_children():
-#					var slot = child.get_node_or_null("Slot")
-#					if slot and slot.texture in chopping_icons:
-#						skillbar.castSkill("chop")
-#						return true
-#
-#	return true
+
+func _isInPortalGroup(node) -> bool:
+	for group in node.get_groups():
+		if str(group).to_lower() == "portal":
+			return true
+	return false
+onready var smelting_system:Control=$UI/Crafting/Smelting
+onready var recipes_book:Control=$UI/Crafting/RecipeeBook
+onready var label:Label=$UI/ResourceDetectionLabel
+onready var prog_texture:TextureProgress = $UI/ResourceDetectionLabel/ProgTexture
 
 
-
-func detectCraftingStations()->void:
-	var smelting_system:Control=$UI/Crafting/Smelting
-	var recipes_book:Control=$UI/Crafting/RecipeeBook
-	var label:Label=$UI/ResourceDetectionLabel
-
+onready var quests_list:Control =  $UI/QuestSystem/QuestList
+onready var quest_system:Control = $UI/QuestSystem
+func detectObjects()->void:
 	var key=InputMap.get_action_list("Harvest")[0].as_text().replace(" (Physical)","").replace(" (physical)","")
 
 	for target in $"Turnable/Bash".get_overlapping_bodies()+$"Turnable/Bash".get_overlapping_areas():
 		if !is_instance_valid(target):continue
 		if target.is_in_group("Fire") and Input.is_action_just_pressed("Harvest"):
 			if crafting.current_fire!=target:
-				if crafting.current_fire:
+				if is_instance_valid(crafting.current_fire):
 					crafting.saveSmelter(crafting.current_fire)
 				crafting.loadSmelter(target)
 			
 			smelting_system.visible=!smelting_system.visible
-			recipes_book.visible=false
-			inventory.visible=true
-			crafting.visible=true
+			recipes_book.show()
+			inventory.show()
+			crafting.show()
 			return
+		
+		elif target.is_in_group("QuestGiver") and Input.is_action_just_pressed("Harvest"):
+			crafting.hide()
+			recipes_book.hide()
+			smelting_system.hide()
+			quests_list.visible = !quests_list.visible
+			quest_system.background.visible = quests_list.visible
+			
 
-		if target.is_in_group("Portal"):
+		
+		if _isInPortalGroup(target):
 			label.visible=true
 			label.text="Press "+key+" to enter portal"
-			if  Input.is_action_just_pressed("Harvest"):
-				var world = get_parent()
-				world.portal()
+			if Input.is_action_just_pressed("Harvest"):
+				get_parent().portal(target)
+
+	
+
+
+
+
+
+var reviving_target:Node = null
+var revive_progress:float = 0.0
+export var revive_hold_duration:float = 10  # seconds of holding to reach 100
+export var revive_heal_percent:float = 0.3
+var reviving_target_active := false
+onready var party:Control = $UI/Party  # NEW
+
+func isPartyMember(target:Node) -> bool:  # NEW
+	if !is_instance_valid(party) or !("entity_name" in target):
+		return false
+	for member in party.party_members:
+		if member.get("entity_name", "") == target.entity_name:
+			return true
+	return false
+
+func detectDownedPlayer() -> void:
+	reviving_target_active = false
+	if get_tree().network_peer == null:
+		return
+
+	var key = InputMap.get_action_list("Harvest")[0].as_text().replace(" (Physical)","").replace(" (physical)","")
+	var found_target = null
+
+	for target in $"Turnable/Bash".get_overlapping_bodies():
+		if !is_instance_valid(target) or target == self:
+			continue
+		if !target.is_in_group("Player"):
+			continue
+		var target_stats = target.get_node_or_null("Stats")
+		if !is_instance_valid(target_stats):
+			continue
+		if target_stats.health <= 0:
+			found_target = target
+			break
+
+	if found_target == null:
+		cancelRevive()
+		return
+
+	reviving_target_active = true
+
+	if reviving_target != found_target:
+		cancelRevive()
+		reviving_target = found_target
+		reviving_target_active = true
+
+	label.visible = true
+
+	if Input.is_action_pressed("Harvest"):
+		prog_texture.visible = true
+		label.text = "Reviving..."
+		var speed_multiplier = 4.0 if isPartyMember(found_target) else 1.0  
+		revive_progress = min(revive_progress + get_physics_process_delta_time() * (100.0 / revive_hold_duration) * speed_multiplier, 100.0)
+		prog_texture.value = revive_progress
+
+		if revive_progress >= 100.0:
+			performRevive(found_target)
+	else:
+		prog_texture.visible = false
+		label.text = "Hold " + key + " to help"
+		revive_progress = 0.0
+		prog_texture.value = 0.0
+
+func cancelRevive() -> void:
+	reviving_target = null
+	revive_progress = 0.0
+	reviving_target_active = false
+	if is_instance_valid(prog_texture):
+		prog_texture.value = 0.0
+		prog_texture.visible = false
+	if is_instance_valid(label):
+		label.visible = false
+		
+	
+
+func performRevive(target:Node) -> void:
+	cancelRevive()
+	var target_stats = target.get_node_or_null("Stats")
+	if is_instance_valid(target_stats):
+		target_stats.reviveTarget(revive_heal_percent)
+
+
+
+
+
+
+
 
 
 onready var crafting:Control = $UI/Crafting
 onready var skill_tree_root:Control = $UI/SkillTreeRoot
-func _physics_process(delta)->void:
-
-	
+func _physics_process(delta) -> void:
+	if isLocalPlayer():
+		_physics_process_master(delta)
+	else:
+		_physics_process_puppet(delta)
+	if _shouldAnimateLocally():
+		animationOrder()
+	safetyStuff()
+	collisionShapesManager()
+func _physics_process_master(delta) -> void:
 	dodgeCollisions(delta)
-	detectGathering()
+	detectDownedPlayer()
+	checkGroundedStuck(delta)
+	if !reviving_target_active:
+		detectGathering()
+		detectObjects()
 	if current_skill=="mine" or current_skill=="chop" or current_skill=="gather":
 		if !chat.line_edit.has_focus():
 			if Input.is_action_pressed("forward") or Input.is_action_pressed("backward") or Input.is_action_pressed("left")or Input.is_action_pressed("right"):
@@ -1260,23 +1979,18 @@ func _physics_process(delta)->void:
 		animation_tree.set("parameters/CombatSwitch/blend_amount",0)
 		animation_tree.set("parameters/IsAlive/blend_amount",0)
 	if anim_locks["guard react"] == true:
-		anim_locks["guard"] = false 
+		anim_locks["guard"] = false
 	if Engine.get_physics_frames() % 12 == 0:
 		if is_on_floor():
 			water_areas.clear()
 			is_in_water = false
-	animationOrder()
-	safetyStuff()
 	forceMovementAnimUnlock()
 	if Input.is_action_just_pressed("unstuck"):
 		if is_writing == false and is_chatting == false:
 			is_in_combat = !is_in_combat
-			translation.x = 0
-			translation.y = 20
-			translation.z = 0
+			unstuckPlayer()
 			enableEntityCollisions()
 			unlockAnim()
-			disableFallDamage()
 			is_in_water = false
 	if Input.is_action_just_pressed("out_of_combat"):
 		if is_writing == false and is_chatting == false:
@@ -1286,13 +2000,13 @@ func _physics_process(delta)->void:
 		if is_writing == false and is_chatting == false:
 			skill_tree_root.visible = !skill_tree_root.visible
 	buoyancy(delta)
-	rootMotion(delta)
+	if current_skill != "" and current_skill != "none":
+		rootMotion(delta)
 	if anim_locks["stunned"] == false and anim_locks["staggered"] == false and is_dead == false:
 		jump()
 		movement(delta)
 	physics(delta)
-	collisionShapesManager()
-	
+
 	if cursor_visible == false:
 		dash()
 
@@ -1308,10 +2022,9 @@ func _physics_process(delta)->void:
 			equipment.visible = !equipment.visible
 			inventory.shop.visible =false
 			$UI/SkillTreeRoot.visible =false
-		
 
 	crafting.update_crafting()
-	
+
 	if !crafting.visible:
 		crafting.returnCraftingItems()
 	else:
@@ -1319,16 +2032,16 @@ func _physics_process(delta)->void:
 			if Input.is_action_just_pressed("help"):
 				crafting.recipes_book.visible  = false
 
-	detectCraftingStations()
 	if Engine.get_physics_frames() % 6 == 0:
 		forceWaterSwitch()
-	if Engine.get_physics_frames() % 12 == 0:
-		equipment.updateEquipment()
+		$UI/CrossairInspect.crossairInspect(self)
 	if Engine.get_physics_frames() % 35 == 0:
 		if inventory.visible: if inventory.has_method("updateInventory"):inventory.updateInventory()
 	if Engine.get_physics_frames() % 60 == 0:
-		$UI/CrossairInspect.crossairInspect(self)
+		replenishHealth()
 		$UI/Menu/CharacterBar.updateBars()
+	if Engine.get_physics_frames() % 360 == 0:
+		saveData()
 	if Engine.get_physics_frames() % 12000 == 0:
 		if not is_in_combat:
 			stored_body == null
@@ -1336,7 +2049,9 @@ func _physics_process(delta)->void:
 	acceleration = 15
 
 	if !is_in_water:
-		if !is_on_floor():
+		if on_platform and is_instance_valid(platform):
+			vertical_velocity = Vector3.ZERO
+		elif !is_on_floor():
 			vertical_velocity += Vector3.DOWN * gravity * 2 * delta
 		else:
 			vertical_velocity = -get_floor_normal() * gravity / 3
@@ -1344,8 +2059,68 @@ func _physics_process(delta)->void:
 		vertical_velocity.y = 0
 	checkFall()
 
+	_syncToPuppets(delta)
+
+#func _physics_process_puppet(delta) -> void:
+#	_applyPuppetState(delta)
+#	_enforceNonLocalPresentation()
+
+# ===== Player.gd — add to _physics_process_puppet() =====
+func _physics_process_puppet(delta) -> void:
+	_applyPuppetState(delta)
+	_enforceNonLocalPresentation()
+	_enforcePuppetVisibility()
+
+# Belt-and-suspenders: whatever state got this puppet into an invisible/
+# frozen/collision-disabled condition (setSuspended(true) never getting
+# its matching setSuspended(false), a race in reinitializeForEntity(),
+# anything), self-correct every physics frame. A puppet has no "own data
+# not loaded yet" race to protect against the way the local player does
+# -- there is no reason a puppet should ever be invisible or frozen.
+func _enforcePuppetVisibility() -> void:
+	if is_suspended:
+		return
+	if !visible:
+		visible = true
+	if !is_physics_processing():
+		set_physics_process(true)
+	if is_instance_valid(fullbody_collision) and fullbody_collision.disabled:
+		fullbody_collision.disabled = false
+	if is_instance_valid(upper_body_collision) and upper_body_collision.disabled:
+		upper_body_collision.disabled = false
+	if is_instance_valid(lower_body_collision) and lower_body_collision.disabled:
+		lower_body_collision.disabled = false
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+func _enforceNonLocalPresentation() -> void:
+	# Belt-and-suspenders against the race (seen specifically under lag)
+	# where a remote player's camera briefly becomes the active viewport
+	# camera, or their UI is briefly visible, on someone else's screen.
+	# Cheap, and makes the wrong state self-correct within a single frame
+	# no matter what caused it.
+	if ui_holder.visible:
+		ui_holder.visible = false
+	if is_instance_valid(camroot):
+		var cam = camroot.get_node_or_null("h/v/Camera")
+		if is_instance_valid(cam) and cam.current:
+			cam.current = false
 
 func _input(event):
+	if !isLocalPlayer():
+		return
 	if event.is_action_pressed("Esc"):
 		is_writing = false
 		is_chatting = false
@@ -1435,7 +2210,10 @@ func movement(delta) -> void:
 	# ==================================================
 	previous_movement_mode = movement_mode
 	movement_mode = "idle"
-
+	if previous_movement_mode == "run":
+		current_run_time += delta
+	else:
+		current_run_time = 0.0
 	var input_direction = Vector3.ZERO
 
 	# ==================================================
@@ -1522,7 +2300,9 @@ func movement(delta) -> void:
 				animation_tree.active = true
 
 			elif sprinting and !is_in_water and stats.health >0:
-				movement_speed = stats.run_speed
+				var t = clamp(current_run_time / run_ramp_time, 0.0, 1.0)
+				var speed_multiplier = lerp(1.0, run_max_speed_multiplier, t)
+				movement_speed = stats.run_speed * speed_multiplier
 				movement_mode = "run"
 				animation_tree.active = true
 
@@ -1631,6 +2411,9 @@ var dash_phase:int = 0
 # 1 = delay
 # 2 = acceleration
 var base_turn_speed:float = 4.4
+export var run_ramp_time:float = 4.0        # seconds of continuous running to hit max speed
+export var run_max_speed_multiplier:float = 1.8  # cap: 1.5x = 50% faster at full ramp
+var current_run_time:float = 0.0
 var dash_turn_multiplier:float = 10
 var dash_start_speed:float = 0.0
 
@@ -1675,6 +2458,7 @@ func unlockAnim():
 	for key in anim_locks:
 		anim_locks[key] = false
 	current_skill = ""
+	root_motion_active = false
 	enableEntityCollisions()
 	animation_tree.active = false
 	last_active_skill = ""
@@ -1690,6 +2474,7 @@ var stored_body_timer:int = 15
 
 onready var left_ray:RayCast = $Turnable/Left
 onready var right_ray:RayCast = $Turnable/Right
+onready var ground_raycast:RayCast = $GroudnCheck
 var climbing_is_enabled:bool = true
 
 
@@ -1724,8 +2509,11 @@ func jump()->void:
 			if cursor_visible == false:
 				if Input.is_action_just_pressed("jump") and is_on_floor():
 					vertical_velocity = Vector3.UP * stats.derived_stats["jump_power"]
+					animation_tree.set("parameters/WaterLandAir/blend_amount",air)
+					animation_tree.set("parameters/ClimbingOrFalling/blend_amount",falling)
 					is_in_combat = false
-
+					airborne_delay = 0.0
+					is_airborne = true
 
 
 	
@@ -1746,7 +2534,20 @@ func disableFallDamage():
 	is_airborne = false
 	was_on_floor = true
 	highest_y = global_transform.origin.y
+	
+	
+export var airborne_coyote_time := 0.12 # grace window before a single is_on_floor() flicker commits to the fall animation
+var airborne_stuck_timer := 0.0
+export var airborne_stuck_timeout := 1.5 # seconds "airborne" with near-zero vertical speed before we force a landing
+
+
 func checkFall():
+	if ground_raycast.is_colliding() and is_on_floor():
+		is_airborne = false
+		animation_tree.set("parameters/WaterLandAir/blend_amount",land)
+		animation_tree.set("parameters/ClimbingOrFalling/blend_amount",falling)
+	if on_platform and is_instance_valid(platform):
+		return
 	if fall_damage_grace_period > 0.0:
 		fall_damage_grace_period -= get_physics_process_delta_time()
 		was_on_floor = is_on_floor()
@@ -1758,7 +2559,8 @@ func checkFall():
 		return
 
 	var on_floor := is_on_floor()
-
+	if !on_floor and vertical_velocity.y <= 0.0 and is_instance_valid($DistanceToFloordRay) and $DistanceToFloordRay.is_colliding():
+		on_floor = true
 	# Left ground
 	if was_on_floor and !on_floor:
 		is_in_combat = false
@@ -1771,11 +2573,6 @@ func checkFall():
 			airborne_delay = 0.0
 			is_airborne = true
 
-	# Delay airborne while sprinting
-	if !on_floor and airborne_delay > 0.0:
-		airborne_delay -= get_physics_process_delta_time()
-		if airborne_delay <= 0.0:
-			is_airborne = true
 
 	if is_airborne and !is_climbing:
 		movement_mode = "fall"
@@ -1784,7 +2581,6 @@ func checkFall():
 	if !on_floor:
 		highest_y = max(highest_y, global_transform.origin.y)
 		animation_tree.active = true
-		animation_tree.set("parameters/Vertical/blend_amount", 1)
 
 	# Landed
 	if !was_on_floor and on_floor:
@@ -1800,10 +2596,156 @@ func checkFall():
 		is_airborne = false
 
 	was_on_floor = on_floor
+
+
+	if is_airborne and abs(vertical_velocity.y) < 0.5 and !is_climbing:
+		airborne_stuck_timer += get_physics_process_delta_time()
+		if airborne_stuck_timer >= airborne_stuck_timeout:
+			is_airborne = false
+			airborne_delay = 0.0
+			airborne_stuck_timer = 0.0
+	else:
+		airborne_stuck_timer = 0.0
+	
+	if is_airborne ==true:
+		animation_tree.set("parameters/WaterLandAir/blend_amount",air)
+		animation_tree.set("parameters/ClimbingOrFalling/blend_amount",falling)
 	
 	
-	
-	
+	checkStuckBetweenCollisions()
+
+
+
+var stuck_frame_count:int = 0
+var stuck_check_delay:float = 0.0
+
+var stuck_last_y:float = 0.0
+var stuck_tracking:bool = false
+var max_stuck_frames:int = 30
+var floor_transition_count:int = 0
+var floor_transition_timer:float = 0.0
+var last_on_floor_state:bool = true
+
+func checkStuckBetweenCollisions()->void:
+	var delta:float = get_physics_process_delta_time()
+	var on_floor := is_on_floor()
+
+	# Track how often the floor state flips — rapid flickering
+	# between grounded/airborne means we're wedged between colliders.
+	floor_transition_timer += delta
+	if on_floor != last_on_floor_state:
+		floor_transition_count += 1
+		last_on_floor_state = on_floor
+
+	var flickering := false
+	if floor_transition_timer >= 1.0:
+		flickering = floor_transition_count > 120
+		floor_transition_count = 0
+		floor_transition_timer = 0.0
+
+	# Track vertical stall while airborne
+	if is_airborne and !on_floor and !is_climbing:
+		if !stuck_tracking:
+			stuck_tracking = true
+			stuck_last_y = global_transform.origin.y
+			stuck_frame_count = 0
+		else:
+			if abs(global_transform.origin.y - stuck_last_y) < 0.01:
+				stuck_frame_count += 1
+			else:
+				stuck_frame_count = 0
+			stuck_last_y = global_transform.origin.y
+	else:
+		stuck_tracking = false
+		stuck_frame_count = 0
+
+	if stuck_frame_count > max_stuck_frames or flickering:
+		unstuckPlayer()
+
+func unstuckPlayer()->void:
+	var delta:float = get_physics_process_delta_time()
+
+	translation.y += 2.0
+	var back_dir:Vector3 = -player_mesh.global_transform.basis.z.normalized()
+	var back_velocity:Vector3 = back_dir * (1.0 / delta)
+	move_and_slide(back_velocity, Vector3.UP)
+
+	vertical_velocity.y = 0.0
+	stuck_frame_count = 0
+	stuck_tracking = false
+	floor_transition_count = 0
+	floor_transition_timer = 0.0
+
+	var messages = [
+		entity_name + " wrenches free from the rocks",
+		entity_name + " breaks loose with a grunt",
+		entity_name + " shoves free and scrambles clear",
+		entity_name + " pulls themselves out of the crevice"
+	]
+	chat.sendSystemMessage(messages[randi() % messages.size()])
+
+# ===== Player.gd — grounded stuck detection =====
+var stuck_grounded_timer := 0.0
+export var stuck_grounded_threshold := 0.5      # seconds of held input with no displacement before triggering
+export var stuck_grounded_min_move_distance := 0.03
+var stuck_grounded_last_pos := Vector3.ZERO
+var stuck_grounded_cooldown := 0.0
+export var stuck_grounded_cooldown_time := 3.0
+export var stuck_grounded_nudge_distance := 1.2
+
+func checkGroundedStuck(delta:float) -> void:
+	if !isLocalPlayer():
+		return
+
+	if stuck_grounded_cooldown > 0.0:
+		stuck_grounded_cooldown -= delta
+
+	if !is_on_floor() or is_airborne or is_climbing or is_in_water:
+		stuck_grounded_timer = 0.0
+		stuck_grounded_last_pos = global_transform.origin
+		return
+
+	if is_on_wall():
+		stuck_grounded_timer = 0.0
+		stuck_grounded_last_pos = global_transform.origin
+		return
+
+	var trying_to_move = moving and direction.length_squared() > 0.01
+
+	if !trying_to_move:
+		stuck_grounded_timer = 0.0
+		stuck_grounded_last_pos = global_transform.origin
+		return
+
+	if global_transform.origin.distance_to(stuck_grounded_last_pos) > stuck_grounded_min_move_distance:
+		stuck_grounded_timer = 0.0
+		stuck_grounded_last_pos = global_transform.origin
+		return
+
+	stuck_grounded_timer += delta
+
+	if stuck_grounded_timer >= stuck_grounded_threshold and stuck_grounded_cooldown <= 0.0:
+		_performGroundedUnstuck()
+		stuck_grounded_timer = 0.0
+		stuck_grounded_last_pos = global_transform.origin
+		stuck_grounded_cooldown = stuck_grounded_cooldown_time
+
+func _performGroundedUnstuck() -> void:
+	var forward_dir:Vector3 = direction.normalized()
+	if forward_dir == Vector3.ZERO and is_instance_valid(player_mesh):
+		forward_dir = -player_mesh.global_transform.basis.z.normalized()
+	if forward_dir == Vector3.ZERO:
+		return
+
+	# tiny lift clears zero-height internal-edge ridges before the push
+	translation.y += 0.05
+	move_and_collide(forward_dir * stuck_grounded_nudge_distance)
+	vertical_velocity.y = 0.0
+
+	if is_instance_valid(chat):
+		chat.sendSystemMessage(entity_name + " breaks free from an invisible snag")
+
+
 onready var chat:Control = $UI/Chat
 
 export var minimum_fall_distance := 3.0
@@ -1818,12 +2760,11 @@ func applyFallDamage(fall_distance: float):
 
 	var damage := int(max(0.0, round(((fall_distance - minimum_fall_distance) * base_fall_damage_multiplier) / (base_fall_resistance + stats.derived_stats["fall_resistance"]) - stats.derived_stats["jump_power"])))
 
-	stats.health -= damage
-	is_in_combat = false
+	if damage <= 0:
+		return
 
-	if damage > 0:
-		chat.sendSystemMessage(entity_name + " took " + str(damage) + " fall damage")
-
+	stats.applyFallDamage(damage)
+	animation_tree.set("parameters/WaterLandAir/blend_amount",0)
 
 
 
@@ -1840,20 +2781,32 @@ func applyFallDamage(fall_distance: float):
 
 var is_in_water:bool = false
 var water_areas := []
+var platform=null
+var platform_local:=Transform()
+var on_platform:=false
+"""
+Root motion may be enabled by an unknown code path. The exact location
+and timing that sets `root_motion_active` to true is currently unknown,
+but something does trigger it.
 
+Make sure root motion is explicitly set to false in `unlockanim()`, both
+in `animation_calls` and inside this script.
+
+Failing to do so can cause the player to become stuck unexpectedly on rare occasions.
+"""
 func physics(delta):
-	if root_motion_active:
+	if root_motion_active and current_skill != "" and current_skill != "none":
 		if is_in_water:
-				translation.y += vertical_velocity.y * get_physics_process_delta_time()
-
-				movement.x = horizontal_velocity.x
-				movement.y = 0
-				movement.z = horizontal_velocity.z
-
-				move_and_slide(movement,Vector3.ZERO,false,4,PI,false)
+			translation.y += vertical_velocity.y * get_physics_process_delta_time()
+			movement.x = horizontal_velocity.x
+			movement.y = 0
+			movement.z = horizontal_velocity.z
+			move_and_slide(movement,Vector3.ZERO,false,4,PI,false)
 		else:
 			vertical_velocity = move_and_slide(vertical_velocity,Vector3.ZERO,false,4,PI,false)
 		return
+	elif root_motion_active:
+		root_motion_active = false
 	if is_dashing:
 		dash_time += delta
 		dash_timer -= delta
@@ -1868,26 +2821,61 @@ func physics(delta):
 			if dash_time >= 0.05:
 				dash_phase = 2
 				dash_time = 0.0
-		elif dash_phase == 2:dash_current_speed = lerp(dash_current_speed,dash_max_power,12.0 * delta)
+		elif dash_phase == 2:
+			dash_current_speed = lerp(dash_current_speed,dash_max_power,12.0*delta)
+
 		horizontal_velocity = dash_dir * dash_current_speed
+
 		if dash_timer <= 0.0:
 			is_dashing = false
 			dash_phase = 0
 			dash_turn_multiplier = 1.0
-	else:horizontal_velocity = horizontal_velocity.linear_interpolate(direction.normalized() * movement_speed,acceleration * delta)
-	movement.z = horizontal_velocity.z + vertical_velocity.z
+	else:
+		horizontal_velocity = horizontal_velocity.linear_interpolate(direction.normalized() * movement_speed,acceleration * delta)
+
+	if on_platform and is_instance_valid(platform): # platform or ship, same shit, i use this code for both personally
+		var basis = platform.global_transform.basis
+		var local_move = Vector3(
+			horizontal_velocity.dot(basis.x),
+			0,
+			-horizontal_velocity.dot(basis.z)
+		) * delta
+
+		platform_local.origin += local_move
+
+		if !is_in_water:
+			platform_local.origin.y += vertical_velocity.y * delta
+
+		global_transform = platform.global_transform * platform_local
+
+		movement.x = horizontal_velocity.x
+		movement.z = horizontal_velocity.z
+		movement.y = vertical_velocity.y
+
+		move_and_slide(Vector3(0,movement.y,0),Vector3.UP)
+
+		platform_local.origin.y = platform.to_local(global_transform.origin).y
+
+		if !is_on_floor():
+			on_platform = false
+			platform = null
+
+		return
+
 	movement.x = horizontal_velocity.x + vertical_velocity.x
 	movement.y = vertical_velocity.y
+	movement.z = horizontal_velocity.z + vertical_velocity.z
+
 	if is_in_water:
-			translation.y += vertical_velocity.y * get_physics_process_delta_time()
-
-			movement.x = horizontal_velocity.x
-			movement.y = 0
-			movement.z = horizontal_velocity.z
-
-			move_and_slide(movement,Vector3.ZERO,false,4,PI,false)
+		translation.y += vertical_velocity.y * get_physics_process_delta_time()
+		movement.x = horizontal_velocity.x
+		movement.y = 0
+		movement.z = horizontal_velocity.z
+		move_and_slide(movement,Vector3.ZERO,false,4,PI,false)
 	else:
 		movement = move_and_slide(movement,Vector3.UP)
+
+
 func isWaterArea(area) -> bool:
 	var node = area
 	while node:
@@ -1899,7 +2887,6 @@ func isWaterArea(area) -> bool:
 	return false
 
 onready var water_level_area:Area = $WaterLevelChest
-onready var water_level_legs_area:Area = $WaterLevelLegs
 func enterDeepWaters(area_rid, area, area_shape_index, _local_shape_index):
 	if isWaterArea(area):
 		if !water_areas.has(area):
@@ -2053,11 +3040,35 @@ func get_character_scene(male:bool)->PackedScene:
 	return female_scene
 
 func _on_SexChange_pressed():
-	var male=stats.sex=="female"
-	stats.sex="male" if male else "female"
+	stats.sex="male" if stats.sex=="female" else "female"
+	saveSex()
 	$UI/Chat/SexChange.text=stats.sex
 	ApplySex()
+func saveSex():
+	var path="user://button_list.save"
+	var data={}
+	var file=File.new()
 
+	if file.file_exists(path):
+		if file.open(path,File.READ)==OK:
+			var loaded=file.get_var()
+			file.close()
+			if typeof(loaded)==TYPE_DICTIONARY:
+				data=loaded
+
+	if !data.has("buttons") or typeof(data.buttons)!=TYPE_ARRAY:
+		data.buttons=[]
+	if !data.has("sexes") or typeof(data.sexes)!=TYPE_DICTIONARY:
+		data.sexes={}
+
+	if data.buttons.find(entity_name)==-1:
+		data.buttons.append(entity_name)
+
+	data.sexes[entity_name]=stats.sex
+
+	if file.open(path,File.WRITE)==OK:
+		file.store_var(data)
+		file.close()
 func ApplySex():
 	var packed_scene=get_character_scene(stats.sex=="male")
 	if !packed_scene: return
@@ -2075,6 +3086,7 @@ func ApplySex():
 	new_character.transform=previous_transform
 	add_child(new_character)
 	player_mesh=new_character
+	character=new_character   #keep this reference current too
 
 	if animation_tree:
 		var animation_player=new_character.get_node_or_null("AnimationPlayer")
@@ -2086,48 +3098,38 @@ func ApplySex():
 		if root_bone:
 			animation_tree.set("root_motion_track",root_bone.get_path())
 
-	equipment.updateEquipment()
+	equipment.forceReapplyEquipment()
 	animation_tree.call_deferred("findAnimPlayer")
 	$character/root/Skeleton/Mesh.hide()
 	stats.applySpecies()
 	stats.resetAttributePoints()
-	
+	call_deferred("loadBoneData")
+	call_deferred("loadHairData")
+	call_deferred("loadBlendShapeData")
+	call_deferred("loadEyeData")
+
+
+
+
+
+
+
+
 func _on_SexChange_mouse_entered():
 	 $UI/Chat/SexChange.text = stats.sex
 func saveData()->void:
-	if !is_instance_valid(self):
+	if !isLocalPlayer(): return
+	if !is_instance_valid(self): return
+	if !data_fully_loaded:
 		return
 
-	var world_id = get_parent().world_id
-	var save_dir = "user://"
-	var save_path = save_dir + name + "_" + entity_name + ".save"
-	var dir = Directory.new()
+	var world = get_parent()
+	if is_instance_valid(world) and world.has_method("savePlayerStateFor"):
+		world.savePlayerStateFor(self, gatherStateSnapshot())
 
-	if !dir.dir_exists(save_dir):
-		dir.make_dir_recursive(save_dir)
-
-	var data = {
-		"position": translation,
-		"current_skill": current_skill,
-		"cursor_visible": cursor_visible,
-		"direction": direction,
-		"which_scene": which_scene,
-		"world_id": world_id
-	}
-
-	if is_instance_valid(character):
-		data.character_rotation = character.rotation
-	if is_instance_valid(turnable):
-		data.turnable_rotation = turnable.rotation
-	if is_inside_tree():
-		data.rotation = rotation
-
-	var file = File.new()
-	if file.open(save_path, File.WRITE) == OK:
-		file.store_var(data)
-		file.close()
-
-	# Update the character's sex inside button_list.save
+	# button_list.save (sex/appearance) stays local on every machine --
+	# it's read by the offline character-select screen (ButtonList.gd),
+	# which only ever runs against its own user://.
 	var button_list_path = "user://button_list.save"
 	var button_data = {
 		"buttons": [],
@@ -2159,124 +3161,301 @@ func saveData()->void:
 		button_file.store_var(button_data)
 		button_file.close()
 
-func loadData()->void:
-	var save_path = "user://" + name + "_" + entity_name + ".save"
+
+func gatherStateSnapshot() -> Dictionary:
+	var current_world_id = "world"
+	var parent = get_parent()
+	if is_instance_valid(parent) and "world_id" in parent:
+		current_world_id = parent.world_id
+
+	var data = {
+		"position": translation,
+		"rotation": rotation,
+		"direction": direction,
+		"cursor_visible": cursor_visible,
+		"which_scene": which_scene,
+		"world_id": current_world_id
+	}
+
+	if is_instance_valid(character):
+		data["character_rotation"] = character.rotation
+	if is_instance_valid(turnable):
+		data["turnable_rotation"] = turnable.rotation
+
+	if is_instance_valid(camroot):
+		data["camera_h_rotation"] = camroot.camrot_h
+		data["camera_v_rotation"] = camroot.camrot_v
+		var cam = camroot.get_node_or_null("h/v/Camera")
+		if is_instance_valid(cam):
+			data["camera_translation"] = cam.translation
+
+	return data
+
+# Actual disk write, shared by both the offline path and the server-side
+# RPC handler below. Always writes to whatever user:// belongs to the
+# machine executing this -- the local computer offline, the server
+# computer online.
+func _writePlayerDataLocal(char_name:String, data:Dictionary) -> void:
+	var save_dir = "user://Characters/" + char_name + "/"
+	var save_path = save_dir + "position_data.save"
+	var dir = Directory.new()
+	if !dir.dir_exists(save_dir):
+		dir.make_dir_recursive(save_dir)
 
 	var file = File.new()
+	if file.open_encrypted_with_pass(save_path, File.WRITE, save_data_password) == OK:
+		file.store_var(data)
+		file.close()
 
-	if !file.file_exists(save_path):
+# Server-side only: receives the local client's own save data and writes
+# it to the SERVER's disk, not the client's.
+remote func requestSavePlayerData(char_name:String, data:Dictionary) -> void:
+	if !get_tree().is_network_server():
 		return
+	_writePlayerDataLocal(char_name, data)
 
-	if file.open(save_path, File.READ) != OK:
+# ===== Player.gd — add these new vars/functions (anywhere at top level) =====
+
+var entity_ready := false
+var _buffered_snapshot = null
+var _buffered_snapshot_has_spawn_pos := false
+var _buffered_spawn_pos = null
+
+# The ONLY place that ever writes equipment/inventory/skillbar/stats/
+# crafting/friends/state onto this node. If the pooled/reused node's own
+# rebuild steps (inventory.reinitializeUI(), skillbar.reinitializeAsLocalPlayer(),
+# hardResetForPool(), etc, all run inside reinitializeForEntity()) haven't
+# finished yet, applying data now would just get wiped out the instant those
+# rebuild steps run afterward -- that's the entire cause of "equipment
+# survives (static TextureRects, nothing ever rebuilds them) but inventory/
+# skillbar don't (their slot grids get rebuilt/duplicated AFTER data could
+# have already landed)". Buffer instead, flush once truly ready.
+func applyFullSnapshot(snapshot: Dictionary, has_spawn_pos: bool) -> void:
+	if !entity_ready:
+		_buffered_snapshot = snapshot
+		_buffered_snapshot_has_spawn_pos = has_spawn_pos
 		return
+	_applyFullSnapshotNow(snapshot, has_spawn_pos)
 
-	var data = file.get_var()
-	file.close()
-
-	if typeof(data) != TYPE_DICTIONARY:
+# Same problem, same fix, for the authoritative spawn position. Setting
+# global_transform.origin on a KinematicBody that was just reparented
+# (pool -> world) races the physics server's own transform flush; on top
+# of that, doing it before reinit has run leaves it vulnerable to being
+# silently correct-but-invisible/frozen. Buffer until entity_ready.
+func setAuthoritativeSpawnPosition(pos: Vector3) -> void:
+	if !entity_ready:
+		_buffered_spawn_pos = pos
 		return
+	global_transform.origin = pos
+# ============================================================
+# Player.gd — replace _applyFullSnapshotNow() in full
+# ============================================================
+func _applyFullSnapshotNow(snapshot: Dictionary, has_spawn_pos: bool) -> void:
+	if is_instance_valid(equipment):
+		equipment.applyOwnEquipmentSnapshot(snapshot.get("equipment", {}))
+	if is_instance_valid(inventory):
+		inventory.applyOwnInventorySnapshot(snapshot.get("inventory", {}))
+	if is_instance_valid(skillbar):
+		skillbar.applyOwnSkillbarSnapshot(snapshot.get("skillbar", {}))
+	if is_instance_valid(stats) and !snapshot.get("stats", {}).empty():
+		stats.applyOwnStatsSnapshot(snapshot["stats"])
+	var crafting_node = get_node_or_null("UI/Crafting")
+	if is_instance_valid(crafting_node) and !snapshot.get("crafting", {}).empty():
+		crafting_node.applyOwnCraftingSnapshot(snapshot["crafting"])
+	var friends_node = get_node_or_null("UI/Friends")
+	if is_instance_valid(friends_node) and !snapshot.get("friends", {}).empty():
+		friends_node.applyOwnFriendsSnapshot(snapshot["friends"])
 
-	if data.has("rotation"):
-		rotation = data["rotation"]
+	var loot_node = get_node_or_null("UI/Loot")
+	if is_instance_valid(loot_node) and loot_node.has_method("applyOwnLootSnapshot") and !snapshot.get("loot", {}).empty():
+		loot_node.applyOwnLootSnapshot(snapshot["loot"])
 
-	if data.has("which_scene"):
-		which_scene = data["which_scene"]
+	var quest_node = get_node_or_null("UI/QuestSystem")
+	if is_instance_valid(quest_node) and quest_node.has_method("applyOwnQuestSnapshot"):
+		quest_node.applyOwnQuestSnapshot(snapshot.get("quests", {}))
 
+	if !has_spawn_pos:
+		applyOwnStateSnapshot(snapshot.get("state", {}))
+	data_fully_loaded = true
+	_revealAfterLoad()
+
+	if get_tree().network_peer != null and !get_tree().is_network_server():
+		PlayerSpawner.rpc_id(1, "reportClientFullyLoaded", entity_name)
+
+
+remote func applyOwnStateSnapshot(data:Dictionary) -> void:
+	if !isLocalPlayer():
+		return
+	if data.empty():
+		return
+	_applyStateSnapshotDirect(data)
+func _markEntityReady() -> void:
+	if entity_ready:
+		return
+	entity_ready = true
+	if _buffered_spawn_pos != null:
+		global_transform.origin = _buffered_spawn_pos
+		_buffered_spawn_pos = null
+	if _buffered_snapshot != null:
+		var snap = _buffered_snapshot
+		var hsp = _buffered_snapshot_has_spawn_pos
+		_buffered_snapshot = null
+		_applyFullSnapshotNow(snap, hsp)
+func _applyStateSnapshotDirect(data:Dictionary) -> void:
+	if data.has("rotation"): rotation = data["rotation"]
+	if data.has("which_scene"): which_scene = data["which_scene"]
 	if data.has("character_rotation") and is_instance_valid(character):
 		character.rotation = data["character_rotation"]
-
 	if data.has("turnable_rotation") and is_instance_valid(turnable):
 		turnable.rotation = data["turnable_rotation"]
+	if data.has("cursor_visible"): cursor_visible = data["cursor_visible"]
+	if data.has("direction"): direction = data["direction"]
+
+	var pos = data.get("position", translation)
+	var saved_positions = data.get("positions", {})
+	var wid = data.get("world_id", "")
+	if typeof(saved_positions) == TYPE_DICTIONARY and wid != "" and saved_positions.has(wid):
+		pos = saved_positions[wid]
+	translation = pos
+
+	_applyCameraSnapshot(data)
 
 
-	if data.has("cursor_visible"):
-		cursor_visible = data["cursor_visible"]
+func _applyCameraSnapshot(data:Dictionary) -> void:
+	if !is_instance_valid(camroot):
+		return
+	var h = camroot.get_node_or_null("h")
+	if data.has("camera_h_rotation"):
+		camroot.camrot_h = data["camera_h_rotation"]
+		if is_instance_valid(h):
+			h.rotation_degrees.y = camroot.camrot_h
+	if data.has("camera_v_rotation") and is_instance_valid(h):
+		camroot.camrot_v = data["camera_v_rotation"]
+		var v = h.get_node_or_null("v")
+		if is_instance_valid(v):
+			v.rotation_degrees.x = camroot.camrot_v
+			if data.has("camera_translation"):
+				var cam = v.get_node_or_null("Camera")
+				if is_instance_valid(cam):
+					cam.translation = data["camera_translation"]
 
-	if data.has("direction"):
-		direction = data["direction"]
+#func loadData()->void:
+#	if !is_inside_tree():
+#		return
+#	var save_path = "user://Characters/" + entity_name + "/position_data.save"
+#	var file = File.new()
+#	if !file.file_exists(save_path):
+#		if get_tree().network_peer == null:
+#			yield(get_tree(), "idle_frame")
+#			spawnAtPlayerStart()
+#		return
+#	if file.open_encrypted_with_pass(save_path, File.READ, save_data_password) != OK:
+#		return
+#	var data = file.get_var()
+#	file.close()
+#	if typeof(data) != TYPE_DICTIONARY:
+#		return
+#
+#	var saved_world_id = data.get("world_id", "world")
+#	var current_world = get_parent()
+#
+#	if get_tree().network_peer != null:
+#		# Online: never locally reparent into a new World instance --
+#		# the server owns world instances; PlayerSpawner places us via RPC
+#		# using this same saved_world_id. Only apply position if we're
+#		# already in the world PlayerSpawner put us in.
+#		if is_instance_valid(current_world) and "world_id" in current_world and current_world.world_id == saved_world_id:
+#			if data.has("rotation"): rotation = data["rotation"]
+#			if data.has("which_scene"): which_scene = data["which_scene"]
+#			if data.has("character_rotation") and is_instance_valid(character): character.rotation = data["character_rotation"]
+#			if data.has("turnable_rotation") and is_instance_valid(turnable): turnable.rotation = data["turnable_rotation"]
+#			if data.has("cursor_visible"): cursor_visible = data["cursor_visible"]
+#			if data.has("direction"): direction = data["direction"]
+#			if data.has("position"): translation = data["position"]
+#		yield(get_tree(), "physics_frame")
+#		disableFallDamage()
+#		ui_holder.visible = isLocalPlayer()
+#		return
+#
+#	if is_instance_valid(current_world) and "world_id" in current_world and current_world.world_id != saved_world_id:
+#		switchToSavedWorld(saved_world_id, data)
+#		return
+#
+#	if data.has("rotation"): rotation = data["rotation"]
+#	if data.has("which_scene"): which_scene = data["which_scene"]
+#	if data.has("character_rotation") and is_instance_valid(character): character.rotation = data["character_rotation"]
+#	if data.has("turnable_rotation") and is_instance_valid(turnable): turnable.rotation = data["turnable_rotation"]
+#	if data.has("cursor_visible"): cursor_visible = data["cursor_visible"]
+#	if data.has("direction"): direction = data["direction"]
+#	if data.has("position"): translation = data["position"]
+#
+#	yield(get_tree(), "physics_frame")
+#	disableFallDamage()
+#	ui_holder.visible = isLocalPlayer()
 
-	yield(get_tree(), "idle_frame")
-
-	if which_portal != "":
-		match which_portal:
-			"mines":
-				translation.x = -5.243
-				translation.y = 1.101
-				translation.z = 13.625
-
-			"world":
-				translation.x = 22.5
-				translation.y = -16.349
-				translation.z = 41.371
-
-			_:
-				if data.has("world_id"):
-					var current_world_id = get_parent().world_id
-
-					if current_world_id != data["world_id"]:
-						switchToSavedWorld(data["world_id"], data)
-						return
-
-				if data.has("position"):
-					translation = data["position"]
-
-	else:
-		if data.has("world_id"):
-			var current_world_id = get_parent().world_id
-
-			if current_world_id != data["world_id"]:
-				switchToSavedWorld(data["world_id"], data)
-				return
-
-		if data.has("position"):
-			translation = data["position"]
-	yield(get_tree(), "physics_frame")
-	disableFallDamage()
-
-func switchToSavedWorld(saved_world_id:String, data:Dictionary)->void:
-	var target_scene = "res://World.tscn"
-
-	if saved_world_id == "mines":
-		target_scene = "res://mines.tscn"
-
-	var packed_scene = load(target_scene)
-
+func switchToSavedWorld(saved_world_id:String, data:Dictionary) -> void:
+	if !WorldRegistry.isKnownWorldId(saved_world_id):
+		return
+	var target_scene_path = WorldRegistry.getScenePath(saved_world_id)
+	var packed_scene = load(target_scene_path)
 	if packed_scene == null:
 		return
 
-	var new_scene = packed_scene.instance()
+	var new_world = packed_scene.instance()
+	new_world.world_id = saved_world_id
+	new_world.skip_offline_autospawn = true
 
-	var old_scene = get_tree().current_scene
+	var old_world = get_parent()
+	get_tree().root.add_child(new_world)
+	get_tree().current_scene = new_world
 
-	get_tree().root.add_child(new_scene)
-	get_tree().current_scene = new_scene
+	if is_instance_valid(old_world):
+		old_world.remove_child(self)
+	new_world.add_child(self)
 
-	var player_found = false
+	var pos:Vector3 = data.get("position", Vector3.ZERO)
+	var saved_positions = data.get("positions", {})
+	if typeof(saved_positions) == TYPE_DICTIONARY and saved_positions.has(saved_world_id):
+		pos = saved_positions[saved_world_id]
+	translation = pos
+	which_scene = saved_world_id
 
-	for node in new_scene.get_children():
-		if node.is_in_group("Player") and node.entity_name == entity_name:
-			player_found = true
+	if data.has("rotation"): rotation = data["rotation"]
+	if data.has("character_rotation") and is_instance_valid(character):
+		character.rotation = data["character_rotation"]
+	if data.has("turnable_rotation") and is_instance_valid(turnable):
+		turnable.rotation = data["turnable_rotation"]
+	if data.has("cursor_visible"): cursor_visible = data["cursor_visible"]
+	if data.has("direction"): direction = data["direction"]
 
-			if data.has("position"):
-				node.translation = data["position"]
+	_applyCameraSnapshot(data)
 
-			break
+	if is_instance_valid(old_world):
+		get_tree().root.remove_child(old_world)
+		old_world.queue_free()
 
-	if !player_found:
-		var new_player = load("res://world/player/scenes/Player.tscn").instance()
-
-		new_player.entity_name = entity_name
-		new_player.which_scene = saved_world_id
-
-		new_scene.add_child(new_player)
-
-		if data.has("position"):
-			new_player.translation = data["position"]
-
-	old_scene.queue_free()
+	yield(get_tree(), "physics_frame")
+	disableFallDamage()
+	ui_holder.visible = isLocalPlayer()
+	reactivateAnimationTree()
 
 
 
+
+
+
+func _forceLocalCameraCurrent(node) -> void:
+	for child in node.get_children():
+		if child is Camera:
+			child.current = true
+		_forceLocalCameraCurrent(child)
+func _forceCamerasNotCurrent(node) -> void:
+	for child in node.get_children():
+		if child is Camera:
+			child.current = false
+		_forceCamerasNotCurrent(child)
+
+var portal_grace_timer = 10
 func loadCharacterData()->void:
 	var file = File.new()
 	if !file.file_exists("user://button_list.save"):
@@ -2695,3 +3874,8 @@ func applyHairTextureRecursive(node:Node,texture:Texture):
 		applyHairTextureRecursive(child,texture)
 
 
+func replenishHealth()->void:
+	if is_in_combat == false:
+		stats.regenerations()
+		if movement_mode == "idle":
+			stats.regenerations()
