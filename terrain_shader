@@ -64,28 +64,39 @@ vec4 sample_no_tile(sampler2D tex,vec2 uv,vec2 scale){
 
 	vec2 tile1=floor(uv),local1=fract(uv);
 	float r1=hash(tile1);
-	local1=rotate90(local1,r1);
-	if(hash(tile1+17.3)>0.5)local1.x=1.0-local1.x;
-	if(hash(tile1+53.7)>0.5)local1.y=1.0-local1.y;
-	vec4 c1=texture(tex,tile1+local1);
+	vec2 rot1=rotate90(local1,r1);
+	if(hash(tile1+17.3)>0.5)rot1.x=1.0-rot1.x;
+	if(hash(tile1+53.7)>0.5)rot1.y=1.0-rot1.y;
+	vec4 c1=texture(tex,tile1+rot1);
 	c1.rgb*=mix(0.97,1.03,hash(tile1+91.4));
 
 	vec2 uv2=uv+vec2(0.37,0.61);
 	vec2 tile2=floor(uv2),local2=fract(uv2);
 	float r2=hash(tile2+127.0);
-	local2=rotate90(local2,r2);
-	if(hash(tile2+201.0)>0.5)local2.x=1.0-local2.x;
-	if(hash(tile2+317.0)>0.5)local2.y=1.0-local2.y;
-	vec4 c2=texture(tex,tile2+local2);
+	vec2 rot2=rotate90(local2,r2);
+	if(hash(tile2+201.0)>0.5)rot2.x=1.0-rot2.x;
+	if(hash(tile2+317.0)>0.5)rot2.y=1.0-rot2.y;
+	vec4 c2=texture(tex,tile2+rot2);
 	c2.rgb*=mix(0.97,1.03,hash(tile2+411.0));
 
-	vec2 blend_uv=uv*0.35;
-	float blend=mix(hash(floor(blend_uv)),hash(floor(blend_uv+vec2(5.37,8.21))),0.5);
-	blend=smoothstep(0.25,0.75,blend);
+	// Each grid has a hard discontinuity at its own tile borders (the
+	// rotation/flip differs tile-to-tile). Previously only grid1's edge
+	// was checked, so grid2's seams showed through uncovered. Track
+	// both grids' distance-to-edge and always favor whichever grid is
+	// currently farther from its own seam -- that grid's seam-free
+	// sample covers for the other one's discontinuity.
+	float edge1=min(min(local1.x,1.0-local1.x),min(local1.y,1.0-local1.y));
+	float edge2=min(min(local2.x,1.0-local2.x),min(local2.y,1.0-local2.y));
+	float safety=edge2/(edge1+edge2+1e-4);
 
-	float edge=min(min(fract(uv.x),1.0-fract(uv.x)),min(fract(uv.y),1.0-fract(uv.y)));
-	blend=mix(0.5,blend,smoothstep(0.0,0.35,edge));
-	blend=mix(blend,0.5,0.35);
+	// Keep the original per-tile hash variation when we're safely away
+	// from both grids' edges; let 'safety' take over as either grid
+	// approaches its own seam.
+	vec2 blend_uv=uv*0.35;
+	float variation=mix(hash(floor(blend_uv)),hash(floor(blend_uv+vec2(5.37,8.21))),0.5);
+	variation=smoothstep(0.25,0.75,variation);
+	float nearEdge=1.0-smoothstep(0.0,0.35,min(edge1,edge2));
+	float blend=mix(variation,safety,nearEdge);
 
 	return mix(c1,c2,blend);
 }
