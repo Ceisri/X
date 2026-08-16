@@ -1,390 +1,212 @@
 shader_type spatial;
-render_mode specular_schlick_ggx, async_visible;
+render_mode async_visible,blend_mix,depth_draw_opaque,cull_back,diffuse_burley,specular_schlick_ggx,unshaded;
+uniform vec4 albedo : hint_color;
 
-uniform sampler2D tex_grass;
-uniform sampler2D tex_rock;
+uniform sampler2D texture_mask;
 
-uniform sampler2D tex_patch_a;
-uniform sampler2D tex_patch_a_noise;
+uniform float lod2_distance : hint_range(0, 1000) = 40.0;
+uniform float lod3_distance : hint_range(0, 1000) = 90.0;
+varying float camera_distance;
 
-uniform sampler2D tex_patch_b;
-uniform sampler2D tex_patch_b_noise;
+uniform sampler2D black_texture : hint_albedo;
+uniform sampler2D black_texture_lod2 : hint_albedo;
+uniform sampler2D black_texture_lod3 : hint_albedo;
+uniform vec2 black_texture_scale=vec2(1.0);
+uniform bool black_texture_no_tile=true;
+uniform vec3 black_triplanar_scale=vec3(0.08);
+uniform vec3 cliff_scale=vec3(0.08);
 
-uniform sampler2D tex_rock_patch_a;
-uniform sampler2D tex_rock_patch_a_noise;
+uniform sampler2D white_texture : hint_albedo;
+uniform sampler2D white_texture_lod2 : hint_albedo;
+uniform sampler2D white_texture_lod3 : hint_albedo;
+uniform vec2 white_texture_scale=vec2(1.0);
+uniform bool white_texture_no_tile=true;
 
-uniform sampler2D tex_rock_patch_b;
-uniform sampler2D tex_rock_patch_b_noise;
+uniform sampler2D blue_texture : hint_albedo;
+uniform sampler2D blue_texture_lod2 : hint_albedo;
+uniform sampler2D blue_texture_lod3 : hint_albedo;
+uniform vec2 blue_texture_scale=vec2(1.0);
+uniform bool blue_texture_no_tile=true;
 
-uniform sampler2D tex_variation_noise;
-uniform sampler2D tex_domain_warp_noise;
+uniform sampler2D yellow_texture : hint_albedo;
+uniform sampler2D yellow_texture_lod2 : hint_albedo;
+uniform sampler2D yellow_texture_lod3 : hint_albedo;
+uniform vec2 yellow_texture_scale=vec2(1.0);
+uniform bool yellow_texture_no_tile=true;
 
-uniform float uv_scale = 8.0;
+uniform sampler2D green_texture : hint_albedo;
+uniform sampler2D green_texture_lod2 : hint_albedo;
+uniform sampler2D green_texture_lod3 : hint_albedo;
+uniform vec2 green_texture_scale=vec2(1.0);
+uniform bool green_texture_no_tile=true;
 
-uniform float macro_scale = 0.08;
-uniform float variation_strength = 0.15;
+uniform sampler2D red_texture : hint_albedo;
+uniform sampler2D red_texture_lod2 : hint_albedo;
+uniform sampler2D red_texture_lod3 : hint_albedo;
+uniform vec2 red_texture_scale=vec2(1.0);
+uniform bool red_texture_no_tile=true;
 
-uniform float rock_macro_scale = 0.015;
-uniform float rock_variation_strength = 0.25;
+uniform float specular;
+uniform float metallic;
+uniform float roughness:hint_range(0.0,1.0);
+uniform float point_size:hint_range(0.0,128.0);
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453123);}
 
-uniform float variation_noise_scale = 0.01;
-uniform float variation_noise_strength = 0.35;
+vec2 rotate90(vec2 uv,float r){
+	if(r<0.25)return uv;
+	if(r<0.5)return vec2(uv.y,1.0-uv.x);
+	if(r<0.75)return vec2(1.0-uv.x,1.0-uv.y);
+	return vec2(1.0-uv.y,uv.x);
+}
 
-uniform float domain_warp_scale1 = 0.0015;
-uniform float domain_warp_strength1 = 30.0;
+vec4 sample_no_tile(sampler2D tex,vec2 uv,vec2 scale){
+	uv*=scale;
 
-uniform float domain_warp_scale2 = 0.004;
-uniform float domain_warp_strength2 = 10.0;
+	vec2 tile1=floor(uv),local1=fract(uv);
+	float r1=hash(tile1);
+	local1=rotate90(local1,r1);
+	if(hash(tile1+17.3)>0.5)local1.x=1.0-local1.x;
+	if(hash(tile1+53.7)>0.5)local1.y=1.0-local1.y;
+	vec4 c1=texture(tex,tile1+local1);
+	c1.rgb*=mix(0.97,1.03,hash(tile1+91.4));
 
-uniform float slope_start = 0.70;
-uniform float slope_end = 0.95;
+	vec2 uv2=uv+vec2(0.37,0.61);
+	vec2 tile2=floor(uv2),local2=fract(uv2);
+	float r2=hash(tile2+127.0);
+	local2=rotate90(local2,r2);
+	if(hash(tile2+201.0)>0.5)local2.x=1.0-local2.x;
+	if(hash(tile2+317.0)>0.5)local2.y=1.0-local2.y;
+	vec4 c2=texture(tex,tile2+local2);
+	c2.rgb*=mix(0.97,1.03,hash(tile2+411.0));
 
-uniform float patch_a_scale = 0.025;
-uniform float patch_a_density = 0.65;
-uniform float patch_a_noise_scale = 0.05;
-uniform float patch_a_noise_strength = 0.35;
-uniform float patch_a_overhang = 0.03;
-uniform float patch_a_blend = 0.06;
+	vec2 blend_uv=uv*0.35;
+	float blend=mix(hash(floor(blend_uv)),hash(floor(blend_uv+vec2(5.37,8.21))),0.5);
+	blend=smoothstep(0.25,0.75,blend);
 
-uniform float patch_b_scale = 0.018;
-uniform float patch_b_density = 0.72;
-uniform float patch_b_noise_scale = 0.04;
-uniform float patch_b_noise_strength = 0.30;
-uniform float patch_b_overhang = 0.025;
-uniform float patch_b_blend = 0.05;
+	float edge=min(min(fract(uv.x),1.0-fract(uv.x)),min(fract(uv.y),1.0-fract(uv.y)));
+	blend=mix(0.5,blend,smoothstep(0.0,0.35,edge));
+	blend=mix(blend,0.5,0.35);
 
-uniform float rock_patch_a_scale = 0.022;
-uniform float rock_patch_a_density = 0.68;
-uniform float rock_patch_a_noise_scale = 0.05;
-uniform float rock_patch_a_noise_strength = 0.30;
-uniform float rock_patch_a_overhang = 0.025;
-uniform float rock_patch_a_blend = 0.05;
+	return mix(c1,c2,blend);
+}
 
-uniform float rock_patch_b_scale = 0.016;
-uniform float rock_patch_b_density = 0.75;
-uniform float rock_patch_b_noise_scale = 0.04;
-uniform float rock_patch_b_noise_strength = 0.25;
-uniform float rock_patch_b_overhang = 0.02;
-uniform float rock_patch_b_blend = 0.04;
+// LOD2/LOD3 skip the double-sample no-tile blend entirely -- that's the
+// expensive part (2x texture() calls + hashing per pixel) and it's not
+// worth paying for terrain far enough away that tiling repetition is
+// imperceptible anyway. Straight texture() sampling on a cheaper LOD
+// texture is enough at range.
+// No-tile blending now applies at every LOD. It's a bit more expensive
+// at range, but skipping it caused visible tile repetition on distant
+// terrain, so we pay the cost uniformly instead.
+vec4 sample_texture(sampler2D tex,sampler2D tex_lod2,sampler2D tex_lod3,vec2 uv,vec2 scale,bool no_tile){
+	if(camera_distance>lod3_distance){
+		return no_tile?sample_no_tile(tex_lod3,uv,scale):texture(tex_lod3,uv*scale);
+	} else if(camera_distance>lod2_distance){
+		return no_tile?sample_no_tile(tex_lod2,uv,scale):texture(tex_lod2,uv*scale);
+	}
+	return no_tile?sample_no_tile(tex,uv,scale):texture(tex,uv*scale);
+}
+vec4 sample_black_cliff(vec2 uv){
+	vec2 cliff_uv=uv;
 
-varying vec3 world_pos;
-varying vec3 world_normal;
+	cliff_uv.x*=cliff_scale.x;
+	cliff_uv.y*=cliff_scale.y*cliff_scale.z;
 
+	return sample_texture(black_texture,black_texture_lod2,black_texture_lod3,cliff_uv,vec2(1.0),black_texture_no_tile);
+}
+
+
+vec3 sample_mask_blur(vec2 uv){
+	vec2 px=2.0/vec2(1024.0);
+	vec3 c=vec3(0.0);
+	float w=0.0;
+	for(int y=-2;y<=2;y++)
+	for(int x=-2;x<=2;x++){
+		c+=texture(texture_mask,uv+vec2(float(x),float(y))*px).rgb;
+		w+=1.0;
+	}
+	return c/w;
+}
+vec4 sample_black_triplanar(vec3 normal, vec3 position){
+	vec3 blend=abs(normal);
+	blend=vec3(pow(blend.x,4.0),pow(blend.y,4.0),pow(blend.z,4.0));
+	blend/=blend.x+blend.y+blend.z;
+
+	vec3 pos=position*black_triplanar_scale;
+
+	vec4 x=texture(black_texture,pos.yz);
+	vec4 y=texture(black_texture,pos.xz);
+	vec4 z=texture(black_texture,pos.xy);
+
+	return x*blend.x+y*blend.y+z*blend.z;
+}
 void vertex(){
-	world_pos = (WORLD_MATRIX * vec4(VERTEX,1.0)).xyz;
-
-	world_normal = normalize(
-		mat3(WORLD_MATRIX) * NORMAL
-	);
+	// VERTEX here is in view space (after MODELVIEW_MATRIX transform),
+	// so its length is the distance from the camera -- same convention
+	// as the mob LOD shader.
+	camera_distance = length((MODELVIEW_MATRIX * vec4(VERTEX, 1.0)).xyz);
 }
-
-float hash(vec2 p){
-	return fract(
-		sin(
-			dot(
-				p,
-				vec2(127.1,311.7)
-			)
-		) * 43758.5453
-	);
-}
-
-float noise(vec2 p){
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-
-	float a = hash(i);
-	float b = hash(i + vec2(1.0,0.0));
-	float c = hash(i + vec2(0.0,1.0));
-	float d = hash(i + vec2(1.0,1.0));
-
-	vec2 u = f * f * (3.0 - 2.0 * f);
-
-	return mix(
-		mix(a,b,u.x),
-		mix(c,d,u.x),
-		u.y
-	);
-}
-
-float fbm(vec2 p){
-	float v = 0.0;
-
-	v += noise(p) * 0.5;
-	p *= 2.0;
-
-	v += noise(p) * 0.25;
-	p *= 2.0;
-
-	v += noise(p) * 0.125;
-
-	return v;
-}
-
-vec2 hash2(vec2 p){
-	p = vec2(
-		dot(p,vec2(127.1,311.7)),
-		dot(p,vec2(269.5,183.3))
-	);
-
-	return fract(
-		sin(p) * 43758.5453
-	);
-}
-
-vec2 domain_warp(vec2 p){
-	vec2 q = p;
-
-	vec2 w1 = texture(
-		tex_domain_warp_noise,
-		q * domain_warp_scale1
-	).rg * 2.0 - 1.0;
-
-	q += w1 *
-		domain_warp_strength1;
-
-	vec2 w2 = texture(
-		tex_domain_warp_noise,
-		q * domain_warp_scale2
-	).rg * 2.0 - 1.0;
-
-	q += w2 *
-		domain_warp_strength2;
-
-	return q;
-}
-
-vec3 sample_variation(
-	sampler2D tex,
-	vec2 uv,
-	float local_macro,
-	float local_strength
-){
-	vec2 distort = texture(
-		tex_variation_noise,
-		world_pos.xz *
-		variation_noise_scale
-	).rg;
-
-	distort = (
-		distort -
-		vec2(0.5,0.5)
-	) * variation_noise_strength;
-
-	uv += distort;
-
-	vec2 cell = floor(
-		uv * local_macro
-	);
-
-	vec2 rnd = hash2(cell);
-
-	vec2 uv1 = uv;
-
-	vec2 uv2 = vec2(
-		-(uv + rnd * 2.0).y,
-		(uv + rnd * 2.0).x
-	);
-
-	vec2 uv3 = uv * 0.5 - rnd;
-
-	vec3 c1 = texture(tex,uv1).rgb;
-	vec3 c2 = texture(tex,uv2).rgb;
-	vec3 c3 = texture(tex,uv3).rgb;
-
-	return mix(
-		mix(
-			c1,
-			c2,
-			local_strength
-		),
-
-		c3,
-
-		local_strength * 0.5
-	);
-}
-
-float build_patch(
-	float scale,
-	float noise_scale,
-	float noise_strength,
-	sampler2D noise_tex
-){
-	vec2 warped = domain_warp(
-		world_pos.xz
-	);
-
-	float m = fbm(
-		warped * scale
-	);
-
-	float n = texture(
-		noise_tex,
-		warped *
-		noise_scale
-	).r;
-
-	m += (
-		n - 0.5
-	) * noise_strength;
-
-	return m;
-}
-
-void apply_patch(
-	inout vec3 col,
-	vec2 world_uv,
-	float scale,
-	float density,
-	float noise_scale,
-	float noise_strength,
-	sampler2D noise_tex,
-	float overhang,
-	float blend,
-	sampler2D patch_tex,
-	float macro_var,
-	float strength_var
-){
-	float mask = build_patch(
-		scale,
-		noise_scale,
-		noise_strength,
-		noise_tex
-	);
-
-	float core = step(
-		density,
-		mask
-	);
-
-	float edge = smoothstep(
-		density -
-		overhang -
-		blend,
-
-		density -
-		overhang,
-
-		mask
-	);
-
-	float apply = max(
-		core,
-		edge
-	);
-
-	if(apply > 0.0){
-		col = mix(
-			col,
-
-			sample_variation(
-				patch_tex,
-				world_uv,
-				macro_var,
-				strength_var
-			),
-
-			apply
-		);
-	}
-}
-
 void fragment(){
-	vec2 world_uv =
-		world_pos.xz /
-		uv_scale;
+	vec3 mask=sample_mask_blur(UV);
 
-	vec3 grass = sample_variation(
-		tex_grass,
-		world_uv,
-		macro_scale,
-		variation_strength
-	);
+	vec4 tex_black=sample_black_cliff(UV);
+	vec4 tex_white=sample_texture(white_texture,white_texture_lod2,white_texture_lod3,UV,white_texture_scale,white_texture_no_tile);
+	vec4 tex_blue=sample_texture(blue_texture,blue_texture_lod2,blue_texture_lod3,UV,blue_texture_scale,blue_texture_no_tile);
+	vec4 tex_yellow=sample_texture(yellow_texture,yellow_texture_lod2,yellow_texture_lod3,UV,yellow_texture_scale,yellow_texture_no_tile);
+	vec4 tex_green=sample_texture(green_texture,green_texture_lod2,green_texture_lod3,UV,green_texture_scale,green_texture_no_tile);
+	vec4 tex_red=sample_texture(red_texture,red_texture_lod2,red_texture_lod3,UV,red_texture_scale,red_texture_no_tile);
 
-	vec3 rock = sample_variation(
-		tex_rock,
-		world_uv,
-		rock_macro_scale,
-		rock_variation_strength
-	);
+	float maxc=max(mask.r,max(mask.g,mask.b));
+	float minc=min(mask.r,min(mask.g,mask.b));
+	float gray=1.0-smoothstep(0.01,0.18,maxc-minc);
+	float neutral=gray*(1.0-maxc);
 
-	float terrain_blend = smoothstep(
-		slope_start,
-		slope_end,
-		world_normal.y
-	);
+	float white_purity=1.0-max(abs(mask.r-mask.g),max(abs(mask.r-mask.b),abs(mask.g-mask.b)));
 
-	vec3 col = mix(
-		rock,
-		grass,
-		terrain_blend
-	);
+	float wWhite=gray*maxc*smoothstep(0.75,1.0,white_purity);
+	float wBlack=gray*(1.0-maxc);
 
-	if(terrain_blend > 0.5){
-		apply_patch(
-			col,
-			world_uv,
-			patch_a_scale,
-			patch_a_density,
-			patch_a_noise_scale,
-			patch_a_noise_strength,
-			tex_patch_a_noise,
-			patch_a_overhang,
-			patch_a_blend,
-			tex_patch_a,
-			macro_scale,
-			variation_strength
-		);
+	vec3 chroma=max(mask-vec3(minc),vec3(0.0));
 
-		apply_patch(
-			col,
-			world_uv,
-			patch_b_scale,
-			patch_b_density,
-			patch_b_noise_scale,
-			patch_b_noise_strength,
-			tex_patch_b_noise,
-			patch_b_overhang,
-			patch_b_blend,
-			tex_patch_b,
-			macro_scale,
-			variation_strength
-		);
+	float wYellow=min(chroma.r,chroma.g);
+	float wRed=max(chroma.r-wYellow,0.0);
+	float wGreen=max(chroma.g-wYellow,0.0);
+	float wBlue=chroma.b;
+
+	float blackBlend=smoothstep(0.0,0.35,neutral);
+	float whiteYellow=wWhite+wYellow;
+	if(whiteYellow>0.0){
+		float add=wRed*blackBlend;
+		wWhite+=add*(wWhite/whiteYellow);
+		wYellow+=add*(wYellow/whiteYellow);
+		wRed-=add;
 	}
 
-	if(terrain_blend <= 0.5){
-		apply_patch(
-			col,
-			world_uv,
-			rock_patch_a_scale,
-			rock_patch_a_density,
-			rock_patch_a_noise_scale,
-			rock_patch_a_noise_strength,
-			tex_rock_patch_a_noise,
-			rock_patch_a_overhang,
-			rock_patch_a_blend,
-			tex_rock_patch_a,
-			rock_macro_scale,
-			rock_variation_strength
-		);
+	wRed*=1.0-gray;
+	wGreen*=1.0-gray;
+	wBlue*=1.0-gray;
+	wYellow*=1.0-gray;
 
-		apply_patch(
-			col,
-			world_uv,
-			rock_patch_b_scale,
-			rock_patch_b_density,
-			rock_patch_b_noise_scale,
-			rock_patch_b_noise_strength,
-			tex_rock_patch_b_noise,
-			rock_patch_b_overhang,
-			rock_patch_b_blend,
-			tex_rock_patch_b,
-			rock_macro_scale,
-			rock_variation_strength
-		);
-	}
+	float total=max(wBlack+wWhite+wBlue+wYellow+wGreen+wRed,0.00001);
+	wBlack/=total;
+	wWhite/=total;
+	wBlue/=total;
+	wYellow/=total;
+	wGreen/=total;
+	wRed/=total;
 
-	ALBEDO = col;
-	EMISSION = col;
+	vec4 albedo_tex=
+		tex_black*wBlack+
+		tex_white*wWhite+
+		tex_blue*wBlue+
+		tex_yellow*wYellow+
+		tex_green*wGreen+
+		tex_red*wRed;
+
+	albedo_tex*=COLOR;
+
+	ALBEDO=albedo.rgb*albedo_tex.rgb;
+	METALLIC=metallic;
+	ROUGHNESS=roughness;
+	SPECULAR=specular;
 }
