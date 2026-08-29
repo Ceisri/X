@@ -39,6 +39,20 @@ func _ready():
 	line_edit.connect("text_changed",self,"writing")
 	line_edit.connect("focus_exited",self,"stopWriting")
 
+
+var max_chat_lines:int = 200
+var general_chat_log:Array = []
+var system_chat_log:Array = []
+var proxy_chat_log:Array = []
+
+func appendBoundedChatLine(log_: Array, box: RichTextLabel, line: String) -> void:
+	log_.append(line)
+
+	if log_.size() > max_chat_lines:
+		log_.pop_front()
+		box.bbcode_text = PoolStringArray(log_).join("\n") + "\n"
+	else:
+		box.append_bbcode(line + "\n")
 func writing(text)->void:
 	player.is_writing=true
 func stopWriting()->void:
@@ -60,7 +74,7 @@ func showGeneralChat():
 
 var system_button_flash=false
 func sendSystemMessage(m):
-	system_chatbox.append_bbcode("%s\n"%m)
+	appendBoundedChatLine(system_chat_log, system_chatbox, m)
 	flashSystemButton()
 
 remote func receiveSystemMessage(message:String) -> void:
@@ -150,7 +164,6 @@ func _on_line_edit_gui_input(e):
 			accept_event()
 func sendButtonPressed():
 	sendMessage()
-
 func sendMessage():
 	var m=line_edit.text.strip_edges()
 	if m=="":
@@ -165,14 +178,13 @@ func sendMessage():
 		if get_tree().network_peer != null:
 			rpc_id(1, "requestSendChatMessage", player.entity_name, m)
 		else:
-			chatbox.append_bbcode("[b]%s:[/b] %s\n"%[player.entity_name,m])
+			appendBoundedChatLine(general_chat_log, chatbox, "[b]%s:[/b] %s"%[player.entity_name,m])
 
 	line_edit.clear()
 	player.is_chatting=false
 	line_edit.release_focus()
 	fade(1.0)
 	startHideTimer()
-
 remote func requestSendChatMessage(entity_name:String, message:String) -> void:
 	if !get_tree().is_network_server():
 		return
@@ -186,7 +198,7 @@ remote func receiveChatMessage(entity_name:String, message:String) -> void:
 	var chat_ui = _findLocalChatUI()
 	if chat_ui == null:
 		return
-	chat_ui.chatbox.append_bbcode("[b]%s:[/b] %s\n"%[entity_name,message])
+	chat_ui.appendBoundedChatLine(chat_ui.general_chat_log, chat_ui.chatbox, "[b]%s:[/b] %s"%[entity_name,message])
 	if chat_ui != self:
 		chat_ui.flashGeneralButton()
 
@@ -206,8 +218,7 @@ export var proximity_label_duration := 6.0
 var proximity_label_timer:Timer = null
 
 func sendProximityChatMessage(m:String) -> void:
-	# Show it on our own chatbox + our own 3D label immediately, online or offline.
-	proxy_chatbox.append_bbcode("[b]%s:[/b] %s\n" % [player.entity_name, m])
+	appendBoundedChatLine(proxy_chat_log, proxy_chatbox, "[b]%s:[/b] %s" % [player.entity_name, m])
 	showProximityLabel3D(m)
 
 	if get_tree().network_peer != null:
@@ -247,7 +258,7 @@ remote func receiveProximityChatMessage(entity_name:String, message:String) -> v
 	var chat_ui = _findLocalChatUI()
 	if chat_ui == null:
 		return
-	chat_ui.proxy_chatbox.append_bbcode("[b]%s:[/b] %s\n" % [entity_name, message])
+	chat_ui.appendBoundedChatLine(chat_ui.proxy_chat_log, chat_ui.proxy_chatbox, "[b]%s:[/b] %s" % [entity_name, message])
 	if chat_ui != self:
 		chat_ui.flashProxyButton()
 

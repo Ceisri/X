@@ -50,7 +50,6 @@ export var sex:String = "male"
 var _bot_save_data:Dictionary = {}
 var which_scene:String = ""
 var _last_known_health:float = 9999999999.0
-const BOT_SAVE_DIR := "user://BotSaves/"
 var creator = null
 var spawned_bodies:Array = []
 var pvp_enabled:bool = false
@@ -63,7 +62,7 @@ var separation_radius:float = 1.6
 var separation_strength:float = 0.45
 var separation_recalc_interval:int = 20
 var steeringRecalcInterval:int = 20
-
+var bot_autosave_interval:int = 3600 # ~60s at 60 physics fps
 enum SteerNavState { STRAIGHT, SIDESTEP, UTURN_RETREAT }
 var _nav_state:int = SteerNavState.STRAIGHT
 var _nav_state_until_ms:int = 0
@@ -170,8 +169,13 @@ var farm_return_min_level:int = 0
 var farm_nearer_search_multiplier:float = 1.6
 var farm_arrival_distance:float = 3.0
 var trader_search_retry_ms:int = 5000
-
-
+var _smoothed_move_dir:Vector3 = Vector3.ZERO
+var move_dir_smooth_speed:float = 10.0
+var _searchBudgetPerFrame:int = 6
+var _searchBudgetBotCountCache:int = 0
+var _searchBudgetBotCountFrame:int = -999999
+var search_budget_per_bot_ratio:float = 0.25   # ~1 slot per 4 bots extra
+var search_budget_max:int = 30
 
 
 
@@ -263,11 +267,44 @@ var anim_locks:Dictionary = {
 	"staggered": false,
 }
 
+const ONE_HANDED_KIT := [
+	{"skill":"veiled thrust","level":0},
+	{"skill":"shield bash","level":2},
+	{"skill":"shield pummel","level":4},
+	{"skill":"smite","level":8},
+	{"skill":"second wind","level":10},
+]
+
+const TWO_HANDED_KIT := [
+	{"skill":"sledge","level":0},
+	{"skill":"stone splitter","level":2},
+	{"skill":"brutal chop","level":4},
+	{"skill":"fury strike","level":8},
+]
 var skill_animations:Dictionary = {
-	"downed start": {
-		WeaponMode.NONE: "DownedStart",
-		WeaponMode.SWORD: "DownedStart",
+	"mine":{
+		WeaponMode.NONE:"mine_cycle",
+		WeaponMode.SWORD:"mine_cycle",
+		WeaponMode.DUAL:"mine_cycle",
+		WeaponMode.SHIELD:"mine_cycle",
+		WeaponMode.TWO_HANDED:"mine_cycle",
 	},
+	"chop":{
+		WeaponMode.NONE:"chop_cycle",
+		WeaponMode.SWORD:"chop_cycle",
+		WeaponMode.DUAL:"chop_cycle",
+		WeaponMode.SHIELD:"chop_cycle",
+		WeaponMode.TWO_HANDED:"chop_cycle",
+	},
+	"gather":{
+		WeaponMode.NONE:"gather",
+		WeaponMode.SWORD:"gather",
+		WeaponMode.DUAL:"gather",
+		WeaponMode.SHIELD:"gather",
+		WeaponMode.TWO_HANDED:"gather",
+	},
+	
+	
 	"combo attack":{
 		WeaponMode.NONE:"ComboATK_Empty_cycle",
 		WeaponMode.SWORD:"ComboATK_OneHanded_cycle",
@@ -275,47 +312,313 @@ var skill_animations:Dictionary = {
 		WeaponMode.SHIELD:"ComboATK_OneHanded_cycle",
 		WeaponMode.TWO_HANDED:"ComboATK_TwoHanded_cycle",
 	},
-	"guard": {
-		WeaponMode.NONE: "Guard_Unarmed_cycle",
-		WeaponMode.SWORD: "Guard_Sword_cycle",
+	"penetrating blow":{
+		WeaponMode.SWORD:"Basic_Stab_OneHanded",
+		WeaponMode.DUAL:"Basic_Stab_OneHanded",
+		WeaponMode.SHIELD:"Basic_Stab_OneHanded",
+		WeaponMode.TWO_HANDED:"Basic_Stab_TwoHanded",
+		#WeaponMode.BOW:"Basic_PenetratingShot",
 	},
-	"guard react": {
-		WeaponMode.NONE: "Guard_Unarmed_react",
-		WeaponMode.SWORD: "Guard_General_react",
+	"evasion":{
+		WeaponMode.NONE:"Roll_Generic",
+		WeaponMode.SWORD:"Roll_Generic",
+		WeaponMode.DUAL:"Roll_Generic",
+		WeaponMode.SHIELD:"Roll_Generic",
+		WeaponMode.TWO_HANDED:"Roll_TwoHanded",
 	},
-	"evasion": {
-		WeaponMode.NONE: "Roll_Generic",
-		WeaponMode.SWORD: "Roll_Generic",
+	"backstep":{
+		WeaponMode.NONE:"Basic_Generic_Backstep",
+		WeaponMode.SWORD:"Basic_Generic_Backstep",
+		WeaponMode.DUAL:"Basic_Generic_Backstep",
+		WeaponMode.SHIELD:"Basic_Generic_Backstep",
+		WeaponMode.TWO_HANDED:"Basic_TwoHanded_Backstep",
 	},
-	"backstep": {
-		WeaponMode.NONE: "Basic_Generic_Backstep",
-		WeaponMode.SWORD: "Basic_Generic_Backstep",
+	"guard":{
+		WeaponMode.NONE:"Guard_Unarmed_cycle",
+		WeaponMode.SWORD:"Guard_Sword_cycle",
+		WeaponMode.DUAL:"Guard_Dual_cycle",
+		WeaponMode.SHIELD:"Guard_Shield_cycle",
+		WeaponMode.TWO_HANDED:"Guard_Sword_cycle",
 	},
-	"flinch": {
-		WeaponMode.NONE: "Flinch_OneHanded",
-		WeaponMode.SWORD: "Flinch_OneHanded",
+	"guard react":{
+		WeaponMode.NONE:"Guard_Unarmed_react",
+		WeaponMode.SWORD:"Guard_General_react",
+		WeaponMode.DUAL:"Guard_Dual_react",
+		WeaponMode.SHIELD:"Guard_Shield_react",
+		WeaponMode.TWO_HANDED:"Guard_General_react",
 	},
-	"knocked back": {
-		WeaponMode.NONE: "FlinchKnockedBack_OneHanded",
-		WeaponMode.SWORD: "FlinchKnockedBack_OneHanded",
+	"downed die":{
+		WeaponMode.NONE:"DownedDie",
+		WeaponMode.SWORD:"DownedDie",
+		WeaponMode.DUAL:"DownedDie",
+		WeaponMode.SHIELD:"DownedDie",
+		WeaponMode.TWO_HANDED:"DownedDie",
 	},
-	"knocked down": {
-		WeaponMode.NONE: "KnockedDown_OneHanded",
-		WeaponMode.SWORD: "KnockedDown_OneHanded",
+	"die":{
+		WeaponMode.NONE:"Die",
+		WeaponMode.SWORD:"Die",
+		WeaponMode.DUAL:"Die",
+		WeaponMode.SHIELD:"Die",
+		WeaponMode.TWO_HANDED:"Die",
 	},
-	"die": {
-		WeaponMode.NONE: "Die",
-		WeaponMode.SWORD: "Die",
+	"get up":{
+		WeaponMode.NONE:"DownedEnd",
+		WeaponMode.SWORD:"DownedEnd",
+		WeaponMode.DUAL:"DownedEnd",
+		WeaponMode.SHIELD:"DownedEnd",
+		WeaponMode.TWO_HANDED:"DownedEnd",
 	},
-	"downed die": {
-		WeaponMode.NONE: "DownedDie",
-		WeaponMode.SWORD: "DownedDie",
+	"flinch  back":{
+		WeaponMode.NONE:"FlinchBack_OneHanded",
+		WeaponMode.SWORD:"FlinchBack_OneHanded",
+		WeaponMode.DUAL:"FlinchBack_OneHanded",
+		WeaponMode.SHIELD:"FlinchBack_OneHanded",
+		WeaponMode.TWO_HANDED:"FlinchBack_TwoHanded",
 	},
-	"get up": {
-		WeaponMode.NONE: "DownedEnd",
-		WeaponMode.SWORD: "DownedEnd",
+	"flinch":{
+		WeaponMode.NONE:"Flinch_OneHanded",
+		WeaponMode.SWORD:"Flinch_OneHanded",
+		WeaponMode.DUAL:"Flinch_OneHanded",
+		WeaponMode.SHIELD:"Flinch_OneHanded",
+		WeaponMode.TWO_HANDED:"Flinch_TwoHanded",
 	},
-}
+	
+	"knocked back":{
+		WeaponMode.NONE:"FlinchKnockedBack_OneHanded",
+		WeaponMode.SWORD:"FlinchKnockedBack_OneHanded",
+		WeaponMode.DUAL:"FlinchKnockedBack_OneHanded",
+		WeaponMode.SHIELD:"FlinchKnockedBack_OneHanded",
+		WeaponMode.TWO_HANDED:"FlinchKnockedBack_TwoHanded",
+	},
+	"knocked down":{
+		WeaponMode.NONE:"KnockedDown_OneHanded",
+		WeaponMode.SWORD:"KnockedDown_OneHanded",
+		WeaponMode.DUAL:"KnockedDown_OneHanded",
+		WeaponMode.SHIELD:"KnockedDown_OneHanded",
+		WeaponMode.TWO_HANDED:"KnockedDown_TwoHanded",
+	},
+
+
+#WARDEN SKLLLS
+"veiled thrust":{
+		WeaponMode.SWORD:"Warden_VeiledThrust_OneHanded",
+		WeaponMode.DUAL:"Warden_VeiledThrust_OneHanded",
+		WeaponMode.SHIELD:"Warden_VeiledThrust_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_VeiledThrust_TwoHanded",
+	},
+"shield bash":{
+		WeaponMode.NONE:"Warden_Bash_OneHanded",
+		WeaponMode.SWORD:"Warden_Bash_OneHanded",
+		WeaponMode.DUAL:"Warden_Bash_OneHanded",
+		WeaponMode.SHIELD:"Warden_Bash_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_Bash_TwoHanded",
+	},
+"shield pummel":{
+		WeaponMode.NONE:"Warden_ShieldPummel_OneHanded",
+		WeaponMode.SWORD:"Warden_ShieldPummel_OneHanded",
+		WeaponMode.DUAL:"Warden_ShieldPummel_OneHanded",
+		WeaponMode.SHIELD:"Warden_ShieldPummel_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_ShieldPummel_TwoHanded",
+	},
+"mighty push":{
+		WeaponMode.NONE:"Warden_MightyPush_OneHanded",
+		WeaponMode.SWORD:"Warden_MightyPush_OneHanded",
+		WeaponMode.DUAL:"Warden_MightyPush_OneHanded",
+		WeaponMode.SHIELD:"Warden_MightyPush_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_MightyPush_TwoHanded",
+	},
+"smite":{
+		WeaponMode.SWORD:"Warden_Smite_OneHanded",
+		WeaponMode.DUAL:"Warden_Smite_OneHanded",
+		WeaponMode.SHIELD:"Warden_Smite_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_Smite_TwoHanded",
+	},
+"aegis":{
+		WeaponMode.NONE:"Rally",
+		WeaponMode.SWORD:"Rally",
+		WeaponMode.DUAL:"Rally",
+		WeaponMode.SHIELD:"Rally",
+		WeaponMode.TWO_HANDED:"Rally",
+	},
+"second wind":{
+		WeaponMode.NONE:"Scream_OneHanded",
+		WeaponMode.SWORD:"Scream_OneHanded",
+		WeaponMode.DUAL:"Scream_OneHanded",
+		WeaponMode.SHIELD:"Scream_OneHanded",
+		WeaponMode.TWO_HANDED:"Scream_TwoHanded",
+	},
+"counterstrike":{
+		WeaponMode.NONE:"Warden_CounterStrike_OneHanded",
+		WeaponMode.SWORD:"Warden_CounterStrike_OneHanded",
+		WeaponMode.DUAL:"Warden_CounterStrike_OneHanded",
+		WeaponMode.SHIELD:"Warden_CounterStrike_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_CounterStrike_TwoHanded",
+	},
+"intercept":{
+		WeaponMode.NONE:"Warden_Intercept_OneHanded",
+		WeaponMode.SWORD:"Warden_Intercept_OneHanded",
+		WeaponMode.DUAL:"Warden_Intercept_OneHanded",
+		WeaponMode.SHIELD:"Warden_Intercept_OneHanded",
+		WeaponMode.TWO_HANDED:"Warden_Intercept_TwoHanded",
+	},
+
+
+#DROMEUS SKILLS
+"cross draw":{
+		WeaponMode.NONE:"Dromeus_CrossDraw_Dual",
+		WeaponMode.SWORD:"Dromeus_CrossDraw_Dual",
+		WeaponMode.DUAL:"Dromeus_CrossDraw_Dual",
+		WeaponMode.SHIELD:"Dromeus_CrossDraw_Dual",
+		WeaponMode.TWO_HANDED:"Dromeus_CrossDraw_Dual",
+	},
+"lunar slash":{
+		WeaponMode.NONE:"Dromeus_LunarSlash_Dual",
+		WeaponMode.SWORD:"Dromeus_LunarSlash_Dual",
+		WeaponMode.DUAL:"Dromeus_LunarSlash_Dual",
+		WeaponMode.SHIELD:"Dromeus_LunarSlash_Dual",
+		WeaponMode.TWO_HANDED:"Dromeus_LunarSlash_Dual",
+	},
+"recoil slash":{
+		WeaponMode.NONE:"Dromeus_RecoilSlash_OneHanded",
+		WeaponMode.SWORD:"Dromeus_RecoilSlash_OneHanded",
+		WeaponMode.DUAL:"Dromeus_RecoilSlash_OneHanded",
+		WeaponMode.SHIELD:"Dromeus_RecoilSlash_OneHanded",
+		WeaponMode.TWO_HANDED:"Dromeus_RecoilSlash_OneHanded",
+	},
+#BERSERK SKILLS
+	"raze":{
+		WeaponMode.SWORD:"Berserk_Raze_OneHanded",
+		WeaponMode.DUAL:"Berserk_Raze_OneHanded",
+		WeaponMode.SHIELD:"Berserk_Raze_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_Raze_TwoHanded",
+	},
+	"reckless":{
+		WeaponMode.NONE:"Buff_OneHanded",
+		WeaponMode.SWORD:"Buff_OneHanded",
+		WeaponMode.DUAL:"Buff_OneHanded",
+		WeaponMode.SHIELD:"Buff_OneHanded",
+		WeaponMode.TWO_HANDED:"Buff_TwoHanded",
+	},
+	"stone splitter":{
+		WeaponMode.SWORD:"Berserk_StoneSplitter_OneHanded",
+		WeaponMode.DUAL:"Berserk_StoneSplitter_OneHanded",
+		WeaponMode.SHIELD:"Berserk_StoneSplitter_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_StoneSplitter_TwoHanded",
+	},
+	"brutal chop":{
+		WeaponMode.SWORD:"Berserk_BrutalChop_OneHanded",
+		WeaponMode.DUAL:"Berserk_BrutalChop_OneHanded",
+		WeaponMode.SHIELD:"Berserk_BrutalChop_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_BrutalChop_TwoHanded",
+	},
+	"shoulder bash":{
+		WeaponMode.NONE:"Berserk_ShoulderBash_OneHanded",
+		WeaponMode.SWORD:"Berserk_ShoulderBash_OneHanded",
+		WeaponMode.DUAL:"Berserk_ShoulderBash_OneHanded",
+		WeaponMode.SHIELD:"Berserk_ShoulderBash_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_ShoulderBash_TwoHanded",
+	},
+	
+	"fury strike":{
+		WeaponMode.SWORD:"Berserk_FuryStrike_OneHanded",
+		WeaponMode.DUAL:"Berserk_FuryStrike_OneHanded",
+		WeaponMode.SHIELD:"Berserk_FuryStrike_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_FuryStrike_TwoHanded",
+	},
+	"sadistic blow":{
+		WeaponMode.SWORD:"Berserk_SadisticBlow_OneHanded",
+		WeaponMode.DUAL:"Berserk_SadisticBlow_OneHanded",
+		WeaponMode.SHIELD:"Berserk_SadisticBlow_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_SadisticBlow_TwoHanded",
+	},
+
+	"sunder" :{
+		WeaponMode.SWORD:"Berserk_Sunder_OneHanded",
+		WeaponMode.DUAL:"Berserk_Sunder_OneHanded",
+		WeaponMode.SHIELD:"Berserk_Sunder_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_Sunder_TwoHanded",
+	},
+	"sledge":{
+		WeaponMode.SWORD:"Berserk_Sledge_OneHanded",
+		WeaponMode.DUAL:"Berserk_Sledge_OneHanded",
+		WeaponMode.SHIELD:"Berserk_Sledge_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_Sledge_TwoHanded",
+	},
+	"heart thrust":{
+		WeaponMode.SWORD:"Berserk_HeartThrust_OneHanded",
+		WeaponMode.DUAL:"Berserk_HeartThrust_OneHanded",
+		WeaponMode.SHIELD:"Berserk_HeartThrust_OneHanded",
+		WeaponMode.TWO_HANDED:"Berserk_HeartThrust_TwoHanded",
+	},
+	"obliteration charge":{
+		WeaponMode.SWORD:"Berserk_ObliterationCharge_cycle",
+		WeaponMode.DUAL:"Berserk_ObliterationCharge_cycle",
+		WeaponMode.SHIELD:"Berserk_ObliterationCharge_cycle",
+		WeaponMode.TWO_HANDED:"Berserk_ObliterationCharge_cycle",
+	},
+	"obliteration":{
+		WeaponMode.SWORD:"Berserk_SadisticBlow_TwoHanded",
+		WeaponMode.DUAL:"Berserk_SadisticBlow_TwoHanded",
+		WeaponMode.SHIELD:"Berserk_SadisticBlow_TwoHanded",
+		WeaponMode.TWO_HANDED:"Berserk_SadisticBlow_TwoHanded",
+	},
+
+	"death from above":{
+		WeaponMode.NONE:"ALL_DeathFromAbove",
+		WeaponMode.SWORD:"ALL_DeathFromAbove",
+		WeaponMode.DUAL:"ALL_DeathFromAbove",
+		WeaponMode.SHIELD:"ALL_DeathFromAbove",
+		WeaponMode.TWO_HANDED:"ALL_DeathFromAbove",
+	},
+	"flury of blows":{
+		WeaponMode.NONE:"ALL_Guillotine",
+		WeaponMode.SWORD:"ALL_Guillotine",
+		WeaponMode.DUAL:"ALL_Guillotine",
+		WeaponMode.SHIELD:"ALL_Guillotine",
+		WeaponMode.TWO_HANDED:"ALL_Guillotine",
+	},
+	"section":{
+		WeaponMode.NONE:"1h_Section",
+		WeaponMode.SWORD:"1h_Section",
+		WeaponMode.DUAL:"1h_Section",
+		WeaponMode.SHIELD:"1h_Section",
+		WeaponMode.TWO_HANDED:"1h_Section",
+	},
+	"perforation trifecta":{
+		WeaponMode.NONE:"1h_PerforactionTrifecta",
+		WeaponMode.SWORD:"1h_PerforactionTrifecta",
+		WeaponMode.DUAL:"1h_PerforactionTrifecta",
+		WeaponMode.SHIELD:"1h_PerforactionTrifecta",
+		WeaponMode.TWO_HANDED:"1h_PerforactionTrifecta",
+	},
+	"cleave":{
+		WeaponMode.NONE:"1h_Slice",
+		WeaponMode.SWORD:"1h_Slice",
+		WeaponMode.DUAL:"1h_Slice",
+		WeaponMode.SHIELD:"1h_Slice",
+		WeaponMode.TWO_HANDED:"1h_Slice",
+	},
+	"parry":{
+		WeaponMode.NONE:"ALL_SwordGuard",
+		WeaponMode.SWORD:"ALL_SwordGuard",
+		WeaponMode.DUAL:"ALL_SwordGuard",
+		WeaponMode.SHIELD:"ALL_SwordGuard",
+		WeaponMode.TWO_HANDED:"Backstep",
+	},
+	"dodge":{
+		WeaponMode.NONE:"Basic_Slide_OneHanded",
+		WeaponMode.SWORD:"Basic_Slide_OneHanded",
+		WeaponMode.DUAL:"Basic_Slide_OneHanded",
+		WeaponMode.SHIELD:"Basic_Slide_OneHanded",
+		WeaponMode.TWO_HANDED:"Basic_Slide_TwoHanded",
+	},
+	"downed":{
+		WeaponMode.NONE:"DownedStart",
+		WeaponMode.SWORD:"DownedStart",
+		WeaponMode.DUAL:"DownedStart",
+		WeaponMode.SHIELD:"DownedStart",
+		WeaponMode.TWO_HANDED:"DownedStart",
+	},}
 
 var combat_idle_animations:Dictionary = {
 	WeaponMode.NONE: "IdleOneHanded_cycle",
@@ -376,13 +679,13 @@ func botReady()-> void:
 	call_deferred("staggeredReady")
 
 func deferredInit() -> void:
-	_bot_save_data = loadBotSave()
+	var world = getMyWorld()
+	if is_instance_valid(world) and world.has_method("readBotSave"):
+		_bot_save_data = world.readBotSave(name)
+	else:
+		_bot_save_data = {}
 	if _bot_save_data.has("entity_name") and str(_bot_save_data["entity_name"]) != "":
 		entity_name = str(_bot_save_data["entity_name"])
-	if _bot_save_data.has("species"):
-		species = str(_bot_save_data["species"])
-	if _bot_save_data.has("sex"):
-		sex = str(_bot_save_data["sex"])
 	randomizeBotName()
 
 	setupPlayerCollisionLayer()
@@ -392,6 +695,11 @@ func deferredInit() -> void:
 		rotation.y = float(_bot_save_data.get("rotation_y", rotation.y))
 	else:
 		placeAtPlayerStart()
+
+	var saved_leader = str(_bot_save_data.get("party_leader_name",""))
+	if saved_leader != "":
+		bot_party_leader_name = saved_leader
+		Global.restoreBotPartyMembership(entity_name, bot_party_leader_name)
 
 	yield(get_tree(), "idle_frame")
 	registerInGlobal()
@@ -408,6 +716,44 @@ func deferredInit() -> void:
 	is_frozen = false
 
 	queueVisualSetup()
+
+
+func gatherBotSnapshot() -> Dictionary:
+	return {
+		"entity_name": entity_name,
+		"level": (stats.level if is_instance_valid(stats) else 0),
+		"experience_points": (stats.experience_points if is_instance_valid(stats) else 0),
+		"attributes": (stats.attributes.duplicate(true) if is_instance_valid(stats) else {}),
+		"attribute_points_spent": (stats.attribute_points_spent.duplicate(true) if is_instance_valid(stats) else {}),
+		"available_attribute_points": (stats.available_attribute_points if is_instance_valid(stats) else 10),
+		"health": (stats.health if is_instance_valid(stats) else 0),
+		"energy": (stats.energy if is_instance_valid(stats) else 0),
+		"arcane": (stats.arcane if is_instance_valid(stats) else 0),
+		"statuses": (stats.statuses.duplicate(true) if is_instance_valid(stats) else {}),
+		"debuff_buffs_active": (stats.debuff_buffs_active.duplicate(true) if is_instance_valid(stats) else {}),
+		"position": global_transform.origin,
+		"rotation_y": rotation.y,
+		"bot_weapon_key": bot_weapon_key,
+		"bot_offhand_key": bot_offhand_key,
+		"bot_coins": bot_coins,
+		"bot_inventory": bot_inventory.duplicate(true),
+		"party_leader_name": bot_party_leader_name,
+	}
+
+func saveData() -> void:
+	if !isBotAuthority():
+		return
+	var world = getMyWorld()
+	if !is_instance_valid(world) or !world.has_method("saveBotFor"):
+		return
+	world.saveBotFor(self, gatherBotSnapshot())
+
+
+
+
+
+
+
 
 const PLAYER_COLLISION_LAYER_BIT: int = 1 << 21
 const CORPSE_COLLISION_LAYER_BIT: int = 1 << 20
@@ -446,59 +792,7 @@ func isNameTakenByOtherBot(candidate:String) -> bool:
 
 
 
-func getBotSavePath() -> String:
-	var world = getMyWorld()
-	var wid := "world"
-	if is_instance_valid(world) and "world_id" in world:
-		wid = world.world_id
-	return BOT_SAVE_DIR + wid + "/" + name + ".save"
 
-func loadBotSave() -> Dictionary:
-	var path := getBotSavePath()
-	var file := File.new()
-	if !file.file_exists(path):
-		return {}
-	if file.open(path, File.READ) != OK:
-		return {}
-	var data = file.get_var()
-	file.close()
-	if typeof(data) != TYPE_DICTIONARY:
-		return {}
-	return data
-
-func saveData() -> void:
-	if !isBotAuthority():
-		return
-	var path := getBotSavePath()
-	var dir_path := path.get_base_dir()
-	var dir := Directory.new()
-	if !dir.dir_exists(dir_path):
-		dir.make_dir_recursive(dir_path)
-
-	var data := {
-		"entity_name": entity_name,
-		"species": species,
-		"sex": sex,
-		"level": (stats.level if is_instance_valid(stats) else 0),
-		"experience_points": (stats.experience_points if is_instance_valid(stats) else 0),
-		"attributes": (stats.attributes.duplicate(true) if is_instance_valid(stats) else {}),
-		"attribute_points_spent": (stats.attribute_points_spent.duplicate(true) if is_instance_valid(stats) else {}),
-		"available_attribute_points": (stats.available_attribute_points if is_instance_valid(stats) else 10),
-		"health": (stats.health if is_instance_valid(stats) else 0),
-		"energy": (stats.energy if is_instance_valid(stats) else 0),
-		"arcane": (stats.arcane if is_instance_valid(stats) else 0),
-		"position": global_transform.origin,
-		"rotation_y": rotation.y,
-		"bot_weapon_key": bot_weapon_key,
-		"bot_offhand_key": bot_offhand_key,
-		"bot_coins": bot_coins,
-		"bot_inventory": bot_inventory.duplicate(true),
-	}
-
-	var file := File.new()
-	if file.open(path, File.WRITE) == OK:
-		file.store_var(data)
-		file.close()
 var cached_entities: Array = []
 
 func cacheEntities() -> void:
@@ -534,10 +828,25 @@ func queueVisualSetup() -> void:
 
 	attachHair()
 	yield(get_tree(), "idle_frame")
+	Global.warmGearMaterials(character)
 	Global.bot_visual_setup_served_ticket += 1
 
-
-
+func syncWeaponModeFromLoadout() -> void:
+	if !wants_weapon or bot_weapon_key == "" or !Global.weapons.has(bot_weapon_key):
+		return
+	var wdata:Dictionary = Global.weapons[bot_weapon_key]
+	var two_handed:bool = bool(wdata.get("two handed", false))
+	var correct_mode:int
+	if two_handed:
+		correct_mode = WeaponMode.TWO_HANDED
+	elif bot_offhand_key == "shield":
+		correct_mode = WeaponMode.SHIELD
+	elif bot_offhand_key != "":
+		correct_mode = WeaponMode.DUAL
+	else:
+		correct_mode = WeaponMode.SWORD
+	if weapons != correct_mode:
+		weapons = correct_mode
 
 func setBotWeaponLoadout(weapon_key:String, offhand_key:String = "") -> void:
 	if !Global.weapons.has(weapon_key):
@@ -583,12 +892,13 @@ func setBotWeaponLoadout(weapon_key:String, offhand_key:String = "") -> void:
 			if is_instance_valid(shield_holder):
 				shield_holder.add_child(_bot_offhand_node)
 
-	# NEW: weapon change is a one-off event, not per-frame -- safe to
-	# recompute equipment stats and force the currently playing/queued
-	# animation to match the new weapon mode immediately.
 	applyBotEquipmentStats()
 	refreshCurrentAnimationForWeapon()
 
+	if is_instance_valid(_bot_weapon_node):
+		Global.warmGearMaterials(_bot_weapon_node)
+	if is_instance_valid(_bot_offhand_node):
+		Global.warmGearMaterials(_bot_offhand_node)
 func refreshCurrentAnimationForWeapon() -> void:
 	if is_in_combat and is_instance_valid(combat_idle):
 		setCombatIdleAnimation()
@@ -683,7 +993,23 @@ func applySavedBotStats() -> void:
 	if _bot_save_data.has("experience_points"):
 		stats.experience_points = int(_bot_save_data["experience_points"])
 
+	if _bot_save_data.has("statuses") and typeof(_bot_save_data["statuses"]) == TYPE_DICTIONARY:
+		stats.statuses = _bot_save_data["statuses"].duplicate(true)
+
+	if _bot_save_data.has("debuff_buffs_active") and typeof(_bot_save_data["debuff_buffs_active"]) == TYPE_DICTIONARY:
+		stats.debuff_buffs_active = _bot_save_data["debuff_buffs_active"].duplicate(true)
+		for buff_name in stats.debuff_buffs_active.keys():
+			var buff_data = stats.debuff_buffs_active[buff_name]
+			if typeof(buff_data) != TYPE_DICTIONARY:
+				continue
+			var dot_interval = float(buff_data.get("dot_interval", buff_data.get("dot timer", 1.0)))
+			if dot_interval <= 0.0:
+				dot_interval = 1.0
+			buff_data["dot_timer"] = dot_interval
+			buff_data["regen_timer"] = 1.0
+
 	stats.markAttributeCacheDirty()
+	stats.updateBuffDebuffs()
 	stats.updateAttributes()
 
 	if _bot_save_data.has("health"):
@@ -701,6 +1027,11 @@ func applySavedBotStats() -> void:
 	if saved_weapon != "":
 		var saved_offhand:String = str(_bot_save_data.get("bot_offhand_key",""))
 		setBotWeaponLoadout(saved_weapon, saved_offhand) # this also calls applyBotEquipmentStats()
+
+
+
+
+
 func getMainWeaponHolder(wdata:Dictionary, in_combat:bool) -> Node:
 	if in_combat:
 		return bone_holder_right
@@ -740,6 +1071,9 @@ func reapplyWeaponHolders() -> void:
 					cur_shield_parent.remove_child(_bot_offhand_node)
 				shield_holder.add_child(_bot_offhand_node)
 
+	Global.warmGearMaterials(_bot_weapon_node)
+	if is_instance_valid(_bot_offhand_node):
+		Global.warmGearMaterials(_bot_offhand_node)
 	
 	
 	
@@ -764,9 +1098,10 @@ func registerInGlobal() -> void:
 	var world = getMyWorld()
 	var world_id:String = world.world_id if is_instance_valid(world) and "world_id" in world else ""
 	Global.register(self, world_id)
-
+	_cachedSeparationWorld = null
+	
+	
 var cachedWorld:Node = null
-
 func getMyWorld() -> Node:
 	if cachedWorld != null and is_instance_valid(cachedWorld):
 		return cachedWorld
@@ -1077,7 +1412,7 @@ func deliverBotChatToUIs(sender_name:String, message:String) -> void:
 	for chat_ui in get_tree().get_nodes_in_group("ChatUI"):
 		if !is_instance_valid(chat_ui) or !("chatbox" in chat_ui):
 			continue
-		chat_ui.chatbox.append_bbcode("[b]%s:[/b] %s\n" % [sender_name, message])
+		chat_ui.appendBoundedChatLine(chat_ui.general_chat_log, chat_ui.chatbox, "[b]%s:[/b] %s" % [sender_name, message])
 
 
 #  obstacle / cliff avoidance via the 5 angled rays 
@@ -1273,17 +1608,9 @@ func computeSteeringDirection(desired_dir:Vector3) -> Vector3:
 			return out2
 
 	return desired_dir
-func isRayClear(ray:RayCast) -> bool:
-	if !is_instance_valid(ray):
-		return true
-	ray.force_raycast_update()
-	if !ray.is_colliding():
-		return true
-	var cast_length = ray.cast_to.length()
-	if cast_length <= 0.001:
-		return true
-	var hit_distance = ray.global_transform.origin.distance_to(ray.get_collision_point())
-	return hit_distance >= cast_length * 0.8
+
+
+
 func computeSteeringDirectionCached(desiredDir:Vector3) -> Vector3:
 	var frame:int = Engine.get_physics_frames() + _bot_frame_offset
 	var interval:int = entity_steer_recalc_interval if _last_steer_was_entity else steeringRecalcInterval
@@ -1292,6 +1619,22 @@ func computeSteeringDirectionCached(desiredDir:Vector3) -> Vector3:
 	cachedSteeringFrame = frame
 	cachedSteeringDir = computeSteeringDirection(desiredDir)
 	return cachedSteeringDir
+
+
+
+func isRayClear(ray:RayCast) -> bool:
+	if !is_instance_valid(ray):
+		return true
+	if !ray.is_colliding():
+		return true
+	var cast_length = ray.cast_to.length()
+	if cast_length <= 0.001:
+		return true
+	var hit_distance = ray.global_transform.origin.distance_to(ray.get_collision_point())
+	return hit_distance >= cast_length * 0.8
+
+
+
 func ensurePersonalOffsets() -> void:
 	if _offset_initialized:
 		return
@@ -1319,21 +1662,35 @@ func computeSeparationVector() -> Vector3:
 	if push.length_squared() < 0.0001:
 		return Vector3.ZERO
 	return push.normalized() * separation_strength
+var _cachedSeparationWorld:Node = null
+var _separation_empty_streak:int = 0
+var separation_empty_backoff_multiplier:int = 4
+
 func computeSeparationCached() -> Vector3:
 	var frame:int = Engine.get_physics_frames() + _bot_frame_offset
-	if frame - _separation_cache_frame < separation_recalc_interval:
+	var interval:int = separation_recalc_interval
+	if _separation_empty_streak >= 3:
+		interval *= separation_empty_backoff_multiplier
+	if frame - _separation_cache_frame < interval:
 		return _separation_cache
 	_separation_cache_frame = frame
 
 	var result:Vector3 = Vector3.ZERO
 	var origin:Vector3 = global_transform.origin
-	var world:Node = getMyWorld()
+
+	if _cachedSeparationWorld == null or !is_instance_valid(_cachedSeparationWorld):
+		_cachedSeparationWorld = getMyWorld()
+	var world:Node = _cachedSeparationWorld
+
+	var found_any := false
+
 	if is_instance_valid(world) and "world_id" in world:
 		for node in Global.queryRadius(world.world_id, origin, separation_radius):
 			if node == self or !is_instance_valid(node):
 				continue
 			if !(node.is_in_group("BOT") or node.is_in_group("Player")):
 				continue
+			found_any = true
 			var offset:Vector3 = origin - node.global_transform.origin
 			offset.y = 0.0
 			var dist:float = offset.length()
@@ -1345,8 +1702,17 @@ func computeSeparationCached() -> Vector3:
 				if node.is_in_group("Player"):
 					push *= 1.1
 				result += push
+
+	if found_any:
+		_separation_empty_streak = 0
+	else:
+		_separation_empty_streak += 1
+
 	_separation_cache = result * separation_strength
 	return _separation_cache
+
+
+
 
 func forceStopAttackAnimation() -> void:
 	if is_instance_valid(animation_tree):
@@ -1439,13 +1805,23 @@ func isMobDeadOrGone(mob:Node) -> bool:
 	if !is_instance_valid(mob_stats):
 		return true
 	return mob_stats.health <= 0
+var _cachedMobTarget:Node = null
+var _cachedMobTargetMs:int = -999999
+var mob_target_cache_interval_ms:int = 650
+func findMobTargetCached() -> Node:
+	var now_ms := OS.get_ticks_msec() + _bot_frame_offset * 4
+	if now_ms - _cachedMobTargetMs < mob_target_cache_interval_ms:
+		return _cachedMobTarget if is_instance_valid(_cachedMobTarget) else null
+	_cachedMobTargetMs = now_ms
+	_cachedMobTarget = findMobTarget()
+	return _cachedMobTarget
 func findMobTarget() -> Node:
 	var world = getMyWorld()
 	if !is_instance_valid(world) or !("world_id" in world):
 		return null
 	var wid:String = world.world_id
 
-	var ref_player := getPartyReferenceRealPlayer()
+	var ref_player := getPartyReferenceRealPlayerCached()
 	if is_instance_valid(ref_player):
 		var ref_target := findMobTargetingPlayer(ref_player, wid)
 		if is_instance_valid(ref_target):
@@ -1460,7 +1836,46 @@ func findMobTarget() -> Node:
 		return party_attacker
 
 	return findWeakestNearestMob(wid)
+var _cachedDangerFlag:bool = false
+var _cachedCombinedScanMs:int = -999999
+var combined_scan_interval_ms:int = 600
+func runCombinedThreatScan() -> void:
+	var now_ms := OS.get_ticks_msec()
+	if now_ms - _cachedCombinedScanMs < combined_scan_interval_ms:
+		return
+	if !Global.canRunExpensiveSearchThisFrame():
+		return
+	_cachedCombinedScanMs = now_ms
 
+	var world = getMyWorld()
+	if !is_instance_valid(world) or !("world_id" in world):
+		_cachedAttackerSelf = null
+		_danger_flag_cached = false
+		return
+
+	var origin:Vector3 = global_transform.origin
+	var scan_radius:float = max(mob_seek_range, danger_scan_radius)
+
+	var found_attacker:Node = null
+	var found_danger:bool = false
+
+	for node in Global.queryRadius(world.world_id, origin, scan_radius):
+		if !is_instance_valid(node) or node == self or node.is_in_group("Player"):
+			continue
+
+		if found_attacker == null and "target" in node and node.target == self and isMobViable(node):
+			found_attacker = node
+
+		if !found_danger and mobHasAggroOn(node, self) and mobIsAboutToStrike(node, self):
+			found_danger = true
+
+		if found_attacker != null and found_danger:
+			break
+
+	_cachedAttackerSelf = found_attacker
+	_cachedAttackerSelfMs = now_ms
+	_danger_flag_cached = found_danger
+	_last_danger_check_ms = now_ms
 func mobHasActiveLock(mob:Node) -> bool:
 	if !is_instance_valid(mob):
 		return false
@@ -1500,7 +1915,7 @@ func updateBotAI(delta:float) -> void:
 		retreat_target_point = Vector3.ZERO
 		return
 
-	updateDangerAwareness()
+	runCombinedThreatScan()
 	if _danger_flag_cached and !hasAnyAnimLockBot():
 		_danger_flag_cached = false
 		triggerEmergencyEvasion()
@@ -1514,7 +1929,7 @@ func updateBotAI(delta:float) -> void:
 	if (Engine.get_physics_frames() + _bot_frame_offset) % 90 == 0:
 		cleanupAggrotargets()
 	if !isMobViable(target_mob):
-		var attacker := findMobAttackingSelfCached()
+		var attacker := _cachedAttackerSelf
 		if is_instance_valid(attacker):
 			target_mob = attacker
 	if isMobViable(target_mob):
@@ -1558,7 +1973,8 @@ func updateBotAI(delta:float) -> void:
 			movement_mode = "idle"
 			is_in_combat = false
 			_move_dir = Vector3.ZERO
-			rotateBotTowards(stare_at_corpse.global_transform.origin - global_transform.origin, delta)
+			_face_dir = stare_at_corpse.global_transform.origin - global_transform.origin
+			_face_turn_speed_mult = 1.0
 			return
 		lootCorpse(stare_at_corpse)
 		stare_at_corpse = null
@@ -1587,7 +2003,7 @@ func updateBotAI(delta:float) -> void:
 		if bot_goal != "":
 			processBotTraderGoal(delta)
 			return
-		target_mob = findMobTarget()
+		target_mob = findMobTargetCached()
 		if !is_instance_valid(target_mob) and has_last_combat_position:
 			if !hasAdequateMobsNearby(mob_seek_range * farm_nearer_search_multiplier):
 				goFarmReturn(delta)
@@ -1638,7 +2054,7 @@ func findNearbyAggressiveMobs(radius:float) -> Array:
 # no mobs within rest_retreat_check_radius, it just stands still.
 var _nearby_mobs_resting_cache:Array = []
 var _nearby_mobs_resting_cache_ms:int = -999999
-var nearby_mobs_resting_cache_interval_ms:int = 500
+var nearby_mobs_resting_cache_interval_ms:int = 700
 func retreatFromMobsWhileResting(delta:float) -> void:
 	var now_ms := OS.get_ticks_msec()
 	if now_ms - _nearby_mobs_resting_cache_ms >= nearby_mobs_resting_cache_interval_ms:
@@ -1709,7 +2125,7 @@ func wantsBackstabPositioning() -> bool:
 func isBehindMob(mob:Node) -> bool:
 	if !is_instance_valid(mob):
 		return false
-	var mob_forward:Vector3 = -mob.global_transform.basis.z.normalized()
+	var mob_forward:Vector3 = mob.global_transform.basis.z.normalized()
 	var to_bot:Vector3 = (global_transform.origin - mob.global_transform.origin)
 	to_bot.y = 0.0
 	if to_bot.length_squared() < 0.0001:
@@ -1722,7 +2138,17 @@ func isBehindMob(mob:Node) -> bool:
 #   2. A mob another BOT party member is already fighting.
 #   3. A mob currently attacking self or a party member.
 #   4. Closest mob with the least health and least defenses.
+var _cachedPartyRefPlayer:Node = null
+var _cachedPartyRefPlayerMs:int = -999999
+export var party_ref_cache_interval_ms:int = 1000
 
+func getPartyReferenceRealPlayerCached() -> Node:
+	var now_ms := OS.get_ticks_msec()
+	if now_ms - _cachedPartyRefPlayerMs < party_ref_cache_interval_ms:
+		return _cachedPartyRefPlayer if is_instance_valid(_cachedPartyRefPlayer) else null
+	_cachedPartyRefPlayerMs = now_ms
+	_cachedPartyRefPlayer = getPartyReferenceRealPlayer()
+	return _cachedPartyRefPlayer
 func getPartyReferenceRealPlayer() -> Node:
 	if bot_party_leader_name == "":
 		return null
@@ -1847,10 +2273,107 @@ func hasClearLineToTarget(target_node:Node) -> bool:
 	return result.empty()
 
 
-func fightMobTarget(delta:float) -> void:
-	tryUsePotionInCombat()
-	tryUsePowerPotionInCombat()
+
+func getUnlockedKitSkillNames(kit:Array) -> Array:
+	var result := []
+	var lvl:int = int(stats.level)
+	for entry in kit:
+		if lvl >= int(entry.level):
+			result.append(entry.skill)
+	return result
+
+func pickKitSkill(kit:Array) -> String:
+	var unlocked := getUnlockedKitSkillNames(kit)
+	if unlocked.empty():
+		return "combo attack"
+
+	var eligible := []
+	for skill_name in unlocked:
+		if skill_name == "second wind":
+			continue # never picked here -- only via shouldUseSecondWind() emergency check
+		if skill_name == "stone splitter":
+			if last_active_skill != "sledge" and last_active_skill != "brutal chop":
+				continue
+		if !Global.skills.has(skill_name):
+			continue
+		var path:String = Global.skills[skill_name].resource_path
+		if active_cooldowns.has(path) and active_cooldowns[path] > 0.0:
+			continue
+		var e_cost:float = Global.getEnergyCost(skill_name)
+		if e_cost > 0.0 and stats.energy < e_cost:
+			continue
+		eligible.append(skill_name)
+
+	if eligible.empty():
+		return "combo attack"
+
+	if kit == TWO_HANDED_KIT:
+		if last_active_skill == "" and eligible.has("sledge"):
+			return "sledge"
+		if last_active_skill == "sledge" and eligible.has("stone splitter"):
+			return "stone splitter"
+	elif kit == ONE_HANDED_KIT:
+		if last_active_skill == "" and eligible.has("veiled thrust"):
+			return "veiled thrust"
+		if last_active_skill == "veiled thrust" and eligible.has("shield bash"):
+			return "shield bash"
+
+	return eligible[randi() % eligible.size()]
+
+export var second_wind_health_threshold:float = 0.2
+
+func shouldUseSecondWind() -> bool:
+	if weapons == WeaponMode.TWO_HANDED:
+		return false
+	if !wants_weapon or bot_weapon_key == "":
+		return false
+	if !Global.skills.has("second wind") or !skill_animations.has("second wind"):
+		return false
+	if int(stats.level) < 10:
+		return false
+	var path:String = Global.skills["second wind"].resource_path
+	if active_cooldowns.has(path) and active_cooldowns[path] > 0.0:
+		return false
+	var e_cost:float = Global.getEnergyCost("second wind")
+	if e_cost > 0.0 and stats.energy < e_cost:
+		return false
+	var ratio:float = stats.health / max(stats.max_health,1.0)
+	return ratio <= second_wind_health_threshold
+
+func isSkillValidForWeaponMode(skill_name:String, mode:int) -> bool:
+	var in_one_handed_kit := false
+	for entry in ONE_HANDED_KIT:
+		if entry.skill == skill_name:
+			in_one_handed_kit = true
+			break
+
+	var in_two_handed_kit := false
+	for entry in TWO_HANDED_KIT:
+		if entry.skill == skill_name:
+			in_two_handed_kit = true
+			break
+
+	if in_one_handed_kit:
+		return mode != WeaponMode.TWO_HANDED
+	if in_two_handed_kit:
+		return mode == WeaponMode.TWO_HANDED
+	return true
+	
+
+var _potion_check_next_ms:int = 0
+var _potion_gate_cached_now_ms:int = 0
+
+func fightMobTargetPotionGate() -> void:
+	var now_ms := OS.get_ticks_msec()
+	_potion_gate_cached_now_ms = now_ms
+	if now_ms >= _potion_check_next_ms:
+		_potion_check_next_ms = now_ms + 500
+		tryUsePotionInCombat()
+		tryUsePowerPotionInCombat()
 	ensurePersonalOffsets()
+
+func fightMobTarget(delta:float) -> void:
+	fightMobTargetPotionGate()
 
 	if is_instance_valid(target_mob) and "stats" in target_mob:
 		var tmob_stats = target_mob.get_node_or_null("Stats")
@@ -1872,7 +2395,12 @@ func fightMobTarget(delta:float) -> void:
 		updateWeaponState()
 		var desiredDir:Vector3
 		if backstab:
-			var mob_forward:Vector3 = -target_mob.global_transform.basis.z.normalized()
+			# FIX: mob's forward is +basis.z under this codebase's own
+			# looking_at(origin - dir) convention (see NPC.gd runMovementTick /
+			# rotateToTarget) -- this was using -basis.z, which computed the
+			# mob's FRONT as its "behind" point. That's the "approaches
+			# facing/chasing backwards relative to the target" bug.
+			var mob_forward:Vector3 = target_mob.global_transform.basis.z.normalized()
 			var behind_point:Vector3 = target_mob.global_transform.origin - mob_forward * (effective_melee_range * 0.85)
 			var toBehind:Vector3 = behind_point - origin
 			toBehind.y = 0.0
@@ -1888,30 +2416,40 @@ func fightMobTarget(delta:float) -> void:
 		if separation.length_squared() > 0.0001:
 			blendedDir = (desiredDir + separation).normalized()
 		var steeredDir:Vector3 = computeSteeringDirectionCached(blendedDir)
-		var turn_mult:float = 2.5 if _nav_state != SteerNavState.STRAIGHT else 1.0
-		rotateBotTowards(steeredDir, delta, turn_mult)
+
 		movement_mode = "run"
-		move_and_slide_with_snap(steeredDir * getMovementSpeed(stats.run_speed) + vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
-		_moved_this_tick = true
+		_face_dir = steeredDir
+		_face_turn_speed_mult = 2.5 if _nav_state != SteerNavState.STRAIGHT else 1.0
+		_move_dir = steeredDir
+		_move_speed = stats.run_speed
 		trackMovementForStuckDetection()
 	else:
-		# Blocked by something between us and the target (trader, crate,
-		# scenery) even though we're within straight-line melee range 
-		# steer around it instead of standing still swinging at air/it.
+		# Blocked by something between us and the target even though we're
+		# within straight-line melee range -- steer around it instead of
+		# standing still swinging at air/it.
 		if getRayObstacle(ray_front) == RayObstacle.WALL or !hasClearLineToTarget(target_mob):
 			is_in_combat = true
 			var steeredDir2:Vector3 = computeSteeringDirectionCached(toTarget.normalized())
-			rotateBotTowards(steeredDir2, delta)
 			movement_mode = "run"
-			move_and_slide_with_snap(steeredDir2 * getMovementSpeed(stats.run_speed) + vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
-			_moved_this_tick = true
+			_face_dir = steeredDir2
+			_face_turn_speed_mult = 1.0
+			_move_dir = steeredDir2
+			_move_speed = stats.run_speed
 			trackMovementForStuckDetection()
 			return
+
 		is_in_combat = true
 		movement_mode = "idle"
 		resetStuckTracking()
-		rotateBotTowards(toTarget, delta)
+		_move_dir = Vector3.ZERO
+		_face_dir = toTarget
+		_face_turn_speed_mult = 1.0
 		chooseCombatAction()
+
+
+
+
+
 func findMobAttackingSelf() -> Node:
 	var world = getMyWorld()
 	if !is_instance_valid(world) or !("world_id" in world):
@@ -1927,7 +2465,7 @@ func findMobAttackingSelf() -> Node:
 	return null
 var _cachedAttackerSelf:Node = null
 var _cachedAttackerSelfMs:int = -999999
-export var attacker_self_cache_interval_ms:int = 400
+export var attacker_self_cache_interval_ms:int = 600
 
 func findMobAttackingSelfCached() -> Node:
 	var now_ms := OS.get_ticks_msec()
@@ -2190,13 +2728,12 @@ func cleanupAggrotargets() -> void:
 	if targets.empty():
 		return
 	var remaining := []
-	var dt := get_physics_process_delta_time()
 	for t in targets:
 		if !is_instance_valid(t.target_entity):
 			continue
 		var dist:float = global_transform.origin.distance_to(t.target_entity.global_transform.origin)
 		if dist > aggro_drop_distance:
-			t.aggro -= aggro_decay_per_second * dt
+			t.aggro -= aggro_decay_per_second 
 		if t.aggro > 0.0:
 			remaining.append(t)
 	targets = remaining
@@ -2457,11 +2994,25 @@ func settleWithGravity() -> void:
 
 
 
+#func rotateBotTowards(dir:Vector3, delta:float, speed_mult:float = 1.0) -> void:
+#	dir.y = 0.0
+#	if dir.length_squared() <= 0.0001:
+#		return
+#	dir = dir.normalized()
+#	var origin:Vector3 = global_transform.origin
+#	var look_pos:Vector3 = origin - dir
+#	look_pos.y = origin.y
+#	var target_transform:Transform = global_transform.looking_at(look_pos, Vector3.UP)
+#	var turn_amount:float = clamp(delta * 8.0 * speed_mult, 0.0, 1.0)
+#	global_transform.basis = global_transform.basis.slerp(target_transform.basis, turn_amount)
 func rotateBotTowards(dir:Vector3, delta:float, speed_mult:float = 1.0) -> void:
 	dir.y = 0.0
 	if dir.length_squared() <= 0.0001:
 		return
 	dir = dir.normalized()
+	var current_forward:Vector3 = -global_transform.basis.z
+	if current_forward.dot(dir) > 0.999:
+		return
 	var origin:Vector3 = global_transform.origin
 	var look_pos:Vector3 = origin - dir
 	look_pos.y = origin.y
@@ -2486,8 +3037,6 @@ var _skill_lock_until_ms:int = 0
 
 func hasActiveSkillLock() -> bool:
 	return OS.get_ticks_msec() < _skill_lock_until_ms
-
-
 func chooseCombatAction() -> void:
 	if !is_instance_valid(target_mob) or !isMobViable(target_mob):
 		clearSkill()
@@ -2496,18 +3045,42 @@ func chooseCombatAction() -> void:
 
 	if current_skill != "" and current_skill != "none":
 		return
+	syncWeaponModeFromLoadout()
+	if shouldUseSecondWind():
+		activateSkill("second wind")
+		return
 
 	var target_locked:bool = mobHasActiveLock(target_mob)
 	var roll:float = randf()
 	var skill_name:String = "combo attack"
 
-	if wantsBackstabPositioning() and !isBehindMob(target_mob):
-		if roll < 0.5:
+	if weapons == WeaponMode.TWO_HANDED:
+		if roll < 0.65:
+			skill_name = pickKitSkill(TWO_HANDED_KIT)
+		elif target_locked and roll < 0.80:
 			skill_name = "evasion"
-		elif roll < 0.7:
+		elif roll < 0.90:
 			skill_name = "backstep"
-		elif roll < 0.9:
-			skill_name = "combo attack"
+		else:
+			skill_name = "guard"
+	elif wants_weapon and bot_weapon_key != "":
+		if wantsBackstabPositioning() and !isBehindMob(target_mob):
+			# still maneuvering for position -- but give it a real chance
+			# to actually use a skill instead of only ever dodging/backstepping
+			if roll < 0.30:
+				skill_name = "evasion"
+			elif roll < 0.50:
+				skill_name = "backstep"
+			elif roll < 0.85:
+				skill_name = pickKitSkill(ONE_HANDED_KIT)
+			else:
+				skill_name = "guard"
+		elif roll < 0.65:
+			skill_name = pickKitSkill(ONE_HANDED_KIT)
+		elif target_locked and roll < 0.80:
+			skill_name = "evasion"
+		elif roll < 0.90:
+			skill_name = "backstep"
 		else:
 			skill_name = "guard"
 	elif target_locked and roll < 0.20:
@@ -2518,22 +3091,35 @@ func chooseCombatAction() -> void:
 		skill_name = "guard"
 
 	activateSkill(skill_name)
-
-
-
-
-	
 func activateSkill(skill_name:String) -> void:
 	if !is_instance_valid(target_mob) or !isMobViable(target_mob):
 		return
 	if !Global.skills.has(skill_name) or !skill_animations.has(skill_name):
 		return
 
+	if !isSkillValidForWeaponMode(skill_name, weapons):
+		skill_name = "combo attack"
+
+	if !isSkillValidForWeaponMode(skill_name, weapons):
+		skill_name = "combo attack"
+
 	var path:String = Global.skills[skill_name].resource_path
 
 	if skill_name != "combo attack" and active_cooldowns.has(path) and active_cooldowns[path] > 0.0:
 		skill_name = "combo attack"
 		path = Global.skills[skill_name].resource_path
+
+	if skill_name != "combo attack":
+		var energy_cost_check:float = Global.getEnergyCost(skill_name)
+		if energy_cost_check > 0.0 and stats.energy < energy_cost_check:
+			skill_name = "combo attack"
+			path = Global.skills[skill_name].resource_path
+
+	if skill_name != "combo attack":
+		var arcane_cost_check:float = Global.getArcaneCost(skill_name)
+		if arcane_cost_check > 0.0 and stats.arcane < arcane_cost_check:
+			skill_name = "combo attack"
+			path = Global.skills[skill_name].resource_path
 
 	if wants_weapon and !_bot_weapon_carry_combat:
 		_bot_weapon_carry_combat = true
@@ -2542,10 +3128,12 @@ func activateSkill(skill_name:String) -> void:
 	var anim_data:Dictionary = skill_animations[skill_name]
 	var new_anim:String = anim_data.get(weapons, anim_data.get(WeaponMode.NONE, ""))
 	if new_anim == "" or !is_instance_valid(animation) or !animation.has_animation(new_anim):
-		return # GUARD: unresolved/missing animation -- never assign, prevents !track_pp spam
+		return
 
 	if skill_name == "evasion":
 		pushThroughMobIfNeeded()
+
+	var prior_skill:String = last_active_skill
 
 	for key in anim_locks.keys():
 		anim_locks[key] = false
@@ -2561,24 +3149,27 @@ func activateSkill(skill_name:String) -> void:
 	if energy_cost > 0.0:
 		stats.energy = max(stats.energy - energy_cost, 0.0)
 
+	var arcane_cost:float = Global.getArcaneCost(skill_name)
+	if arcane_cost > 0.0:
+		stats.arcane = max(stats.arcane - arcane_cost, 0.0)
+
 	var cooldown:float = Global.getCooldown(path)
 	cooldown /= max(0.01, float(stats.derived_stats.get("cooldown_reduction", 1.0)))
 	if cooldown > 0.0:
 		active_cooldowns[path] = cooldown
 
-	var anim_length := animation.get_animation(new_anim).length
 	var time_scale:float = max(float(stats.derived_stats.get("attack_speed", 1.0)), 0.01)
+	if skill_name == "stone splitter" and (prior_skill == "sledge" or prior_skill == "brutal chop"):
+		time_scale *= 3.0
+
+	setBotAnimParam("parameters/SkillTimeScale/scale", time_scale)
+
+	var anim_length := animation.get_animation(new_anim).length
 	_skill_lock_until_ms = OS.get_ticks_msec() + int((anim_length / time_scale) * 1000.0)
-
-
-
-
-
-
 func pushThroughMobIfNeeded() -> void:
 	if !is_instance_valid(detection_area):
 		return
-	var dodge_dir:Vector3 = -global_transform.basis.z.normalized()
+	var dodge_dir:Vector3 = global_transform.basis.z.normalized()
 	if dodge_dir.length_squared() < 0.0001:
 		return
 
@@ -2595,13 +3186,11 @@ func pushThroughMobIfNeeded() -> void:
 
 	global_transform.origin += dodge_dir * 2.2
 
-
-
 var active_cooldowns:Dictionary = {}
 
 func updateCooldowns() -> void:
 	for key in active_cooldowns.keys():
-		var remaining = max(active_cooldowns[key] - 1, 0.0)
+		var remaining = active_cooldowns[key] - 1.0
 		if remaining <= 0.0:
 			active_cooldowns.erase(key)
 		else:
@@ -2639,11 +3228,10 @@ func _setDodgeCollisionExceptions(disable:bool) -> void:
 			body.remove_collision_exception_with(self)
 		_dodge_exception_bodies.clear()
 
-#  root motion for combo attack / evasion 
 var root_motion_compensation:float = 0.01
 
 func applySkillRootMotion(delta:float) -> void:
-	if !is_instance_valid(animation_tree) or delta <= 0.0:
+	if !is_instance_valid(animation_tree):
 		return
 	if current_skill != "combo attack" and current_skill != "evasion":
 		return
@@ -2652,7 +3240,10 @@ func applySkillRootMotion(delta:float) -> void:
 	if motion.length_squared() < 0.000001:
 		return
 	motion = global_transform.basis.xform(motion)
-	move_and_slide(motion * root_motion_compensation / delta, Vector3.UP)
+	var physics_dt:float = get_physics_process_delta_time()
+	if physics_dt <= 0.0:
+		return
+	move_and_slide(motion * root_motion_compensation / physics_dt, Vector3.UP)
 
 
 #  physics loop 
@@ -2662,33 +3253,143 @@ var max_fall_speed:float = 40.0
 var _moved_this_tick := false
 var _accumulated_delta_bot:float = 0.0
 var _last_animation_visual_frame:int = -1
-func _physics_process(delta:float) -> void:
-	botPhyProcess(delta)
+var _bot_substep_accum:int = 0
+var _last_bot_visual_frame:int = -1
+export var bot_substep_scale_cap:float = 6.0
 
-func botPhyProcess(delta)->void: #EXISTS only to profile ms cost
+func _physics_process(delta:float) -> void:
+	_bot_substep_accum += 1
+	var visual_frame:int = Engine.get_frames_drawn()
+	if visual_frame == _last_bot_visual_frame:
+		return
+	_last_bot_visual_frame = visual_frame
+
+	var substeps:int = clamp(_bot_substep_accum, 1, int(bot_substep_scale_cap))
+	var effective_delta:float = delta * float(substeps)
+	_bot_substep_accum = 0
+
+	botPhyProcess(effective_delta)
+# Same root cause as NPC.gd: this used to gate on Engine.get_frames_drawn()
+# and accumulate up to movement_substep_scale_cap (6) physics ticks worth
+# of delta into one inflated call. get_frames_drawn() doesn't behave as a
+# real per-frame clock on a dedicated server (nothing renders there), so
+# this either did nothing useful (fired every tick anyway, paying the
+# extra bookkeeping for zero benefit) or actually caused MORE effective
+# work per tick by inflating delta up to 6x when it did collapse ticks --
+# 6 bots each doing up to 6x their real per-tick cost is exactly "30
+# calls' worth of work for 6 bots." _physics_process is already called
+# exactly once per physics tick per node by the engine -- removing the
+# gate makes that the literal call count, no multiplier, no undercount.
+func botPhyProcess(delta:float) -> void:
 	var frame:int = Engine.get_physics_frames()
+
 	if isBotAuthority():
 		if (frame + _bot_frame_offset) % frozen_check_interval == 0:
 			updateVisibilityRelevance()
+
 	if is_frozen:
 		return
+
 	if isBotAuthority():
 		physicsProcessAuthority(delta, frame)
 	else:
 		physicsProcessPuppet(delta)
 
 	if _shouldAnimateLocally():
-		var visual_frame:int = Engine.get_frames_drawn()
-		if visual_frame != _last_animation_visual_frame:
-			_last_animation_visual_frame = visual_frame
-			animationBOT(delta)
+		animationBOT(delta)
 
+
+
+var movement_substep_scale_cap:float = 6.0
 var _last_ai_visual_frame:int = -1
+var _movement_substep_accum:int = 0
+var _last_movement_visual_frame:int = -1
+
+var _crawl_substep_accum:int = 0
+var _last_crawl_visual_frame:int = -1
+#func physicsProcessAuthority(delta:float, frame:int) -> void:
+#	var revive_locked:bool = OS.get_ticks_msec() < revive_lock_until_ms
+#	var has_lock:bool = hasAnyAnimLockBot()
+#
+#	if is_downed:
+#		applySkillRootMotion(delta)
+#		crawlTowardsNearestPlayer(delta)
+#	elif has_lock or revive_locked:
+#		if has_lock and !hasActiveSkillLock() and !revive_locked:
+#			clearSkill()
+#			forceStopAttackAnimation()
+#		else:
+#			applySkillRootMotion(delta)
+#			if !isGuarding() and is_instance_valid(target_mob) and !revive_locked:
+#				rotateBotTowards(target_mob.global_transform.origin - global_transform.origin, delta)
+#	else:
+#		runBotMovementExecutionTick(delta, 1.0)
+#
+#		var interval:int = getAiTickInterval()
+#		if frame % interval == 0 and Global.canRunBotAIThisFrame(self):
+#			var elapsed:int = frame - _last_ai_tick_frame
+#			if elapsed <= 0 or elapsed > max_ai_interval * 2:
+#				elapsed = 1
+#			_current_tick_scale = min(float(elapsed), 6.0)
+#			_last_ai_tick_frame = frame
+#			updateBotAI(delta)
+#
+#	_moved_this_tick = false
+#	if current_skill == "get up" and anim_locks.get("get up", false) and !hasActiveSkillLock():
+#		anim_locks["get up"] = false
+#		current_skill = ""
+#		has_anim_lock = false
+#		last_active_skill = ""
+#
+#	if stats.health <= 0 and !is_downed:
+#		enterDownedState()
+#
+#	updateDodgeCollisions()
+#	if is_in_combat or has_lock or is_instance_valid(target_mob) or is_downed:
+#		_idle_still_frames = 0
+#	if is_instance_valid(target_mob) and isMobDeadOrGone(target_mob):
+#		var dead_mob = target_mob
+#		kills_since_last_sell += 1
+#		checkEnterRestAfterKill()
+#		removeAggroTarget(dead_mob)
+#		clearTargetOnly()
+#		clearSkill()
+#		forceStopAttackAnimation()
+#		var still_attacked := findHighestAggro()
+#		var being_attacked := still_attacked != null and is_instance_valid(still_attacked.target_entity)
+#		if !is_resting and !being_attacked:
+#			stare_at_corpse = dead_mob
+#			stare_until_ms = OS.get_ticks_msec() + int(rand_range(1000.0, 2000.0))
+#
+#	if !_moved_this_tick:
+#		if !_cached_on_floor or vertical_velocity.length_squared() > 0.0001:
+#			settleWithGravity()
+#
+#	if (frame + _bot_frame_offset) % 6 == 0:
+#		if wants_weapon:
+#			updateWeaponState()
+#	if (frame + _bot_frame_offset) % 10 == 0:
+#		applyGravity(delta)
+#		Global.updatePosition(self)
+#	if (frame + _bot_frame_offset) % 15 == 0:
+#		_cachedNearbyDownedAlly = findDownedAlly()
+#		_nearby_downed_ally_cached = is_instance_valid(_cachedNearbyDownedAlly)
+#
+#	if (frame + _bot_frame_offset) % 20 == 0:
+#		Global.pulseAggroSignal(self)
+#	if (frame + _bot_frame_offset) % 60 == 0:
+#		updateCooldowns()
+#		updateChat()
+#		safetyCheck()
+#		checkFallThroughFloor()
+#
+#		if is_downed:
+#			updateDownedState()
+#	if (frame + _bot_frame_offset) % 120 == 0:
+#		checkStuckInsideOtherEntity()
+
+#	syncToPuppets(delta)
 func physicsProcessAuthority(delta:float, frame:int) -> void:
-	if is_frozen:
-		if (frame + _bot_frame_offset) % 60 == 0:
-			updateChat()
-		return
 	var revive_locked:bool = OS.get_ticks_msec() < revive_lock_until_ms
 	var has_lock:bool = hasAnyAnimLockBot()
 
@@ -2702,27 +3403,18 @@ func physicsProcessAuthority(delta:float, frame:int) -> void:
 		else:
 			applySkillRootMotion(delta)
 			if !isGuarding() and is_instance_valid(target_mob) and !revive_locked:
-				if (frame + _bot_frame_offset) % 2 == 0:
-					rotateBotTowards(target_mob.global_transform.origin - global_transform.origin, delta)
+				rotateBotTowards(target_mob.global_transform.origin - global_transform.origin, delta)
 	else:
-		runBotMovementExecutionTick(delta)
-		var visual_frame_ai:int = Engine.get_frames_drawn()
-		if visual_frame_ai != _last_ai_visual_frame:
-			var interval:int = getAiTickInterval()
-			if frame % interval == 0 and Global.canRunBotAIThisFrame(self):
-				_last_ai_visual_frame = visual_frame_ai
-				var elapsed:int = frame - _last_ai_tick_frame
-				if elapsed <= 0 or elapsed > max_ai_interval * 2:
-					elapsed = 1
-				_current_tick_scale = min(float(elapsed), 6.0)
-				_last_ai_tick_frame = frame
-				updateBotAI(delta)
+		runBotMovementExecutionTick(delta, 1.0)
 
-	var visual_frame:int = Engine.get_frames_drawn()
-	var is_new_visual_frame:bool = visual_frame != _last_processed_visual_frame
-	if visual_frame == _last_processed_visual_frame:
-		return
-	_last_processed_visual_frame = visual_frame
+		var interval:int = getAiTickInterval()
+		if frame % interval == 0 and Global.canRunBotAIThisFrame(self):
+			var elapsed:int = frame - _last_ai_tick_frame
+			if elapsed <= 0 or elapsed > max_ai_interval * 2:
+				elapsed = 1
+			_current_tick_scale = min(float(elapsed), 6.0)
+			_last_ai_tick_frame = frame
+			updateBotAI(delta)
 
 	_moved_this_tick = false
 	if current_skill == "get up" and anim_locks.get("get up", false) and !hasActiveSkillLock():
@@ -2734,7 +3426,8 @@ func physicsProcessAuthority(delta:float, frame:int) -> void:
 	if stats.health <= 0 and !is_downed:
 		enterDownedState()
 
-	updateDodgeCollisions()
+	if frame % 3 == 0:
+		updateDodgeCollisions()
 	if is_in_combat or has_lock or is_instance_valid(target_mob) or is_downed:
 		_idle_still_frames = 0
 	if is_instance_valid(target_mob) and isMobDeadOrGone(target_mob):
@@ -2777,15 +3470,59 @@ func physicsProcessAuthority(delta:float, frame:int) -> void:
 			updateDownedState()
 	if (frame + _bot_frame_offset) % 120 == 0:
 		checkStuckInsideOtherEntity()
-
 	syncToPuppets(delta)
 
-func runBotMovementExecutionTick(delta:float) -> void:
+
+
+
+#func runBotMovementExecutionTick(effective_delta:float, move_scale:float = 1.0) -> void:
+#	if _face_dir != Vector3.ZERO:
+#		rotateBotTowards(_face_dir, effective_delta, _face_turn_speed_mult)
+#
+#	if _move_dir != Vector3.ZERO:
+#		var t:float = clamp(effective_delta * move_dir_smooth_speed, 0.0, 1.0)
+#		if _smoothed_move_dir == Vector3.ZERO:
+#			_smoothed_move_dir = _move_dir
+#		else:
+#			_smoothed_move_dir = _smoothed_move_dir.linear_interpolate(_move_dir, t)
+#			if _smoothed_move_dir.length_squared() > 0.0001:
+#				_smoothed_move_dir = _smoothed_move_dir.normalized()
+#			else:
+#				_smoothed_move_dir = _move_dir
+#		move_and_slide_with_snap(_smoothed_move_dir * _move_speed * move_scale + vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+#		_moved_this_tick = true
+#	else:
+#		_smoothed_move_dir = Vector3.ZERO
+
+func runBotMovementExecutionTick(effective_delta:float, move_scale:float = 1.0) -> void:
 	if _face_dir != Vector3.ZERO:
-		rotateBotTowards(_face_dir, delta, _face_turn_speed_mult)
+		rotateBotTowards(_face_dir, effective_delta, _face_turn_speed_mult)
+
 	if _move_dir != Vector3.ZERO:
-		move_and_slide_with_snap(_move_dir * _move_speed + vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+		var t:float = clamp(effective_delta * move_dir_smooth_speed, 0.0, 1.0)
+		if _smoothed_move_dir == Vector3.ZERO:
+			_smoothed_move_dir = _move_dir
+		else:
+			_smoothed_move_dir = _smoothed_move_dir.linear_interpolate(_move_dir, t)
+			if _smoothed_move_dir.length_squared() > 0.0001:
+				_smoothed_move_dir = _smoothed_move_dir.normalized()
+			else:
+				_smoothed_move_dir = _move_dir
+
+		# max_slides stays fixed at 4 regardless of distance to a player.
+		# It's cheap (extra collision-resolution passes only spent when an
+		# actual collision happens) and is NOT the same thing as movement
+		# speed -- cutting it to 2 for distant bots was silently causing
+		# their velocity to get killed/deflected against walls, mobs, and
+		# uneven terrain far more often, which is what looked like "moving
+		# slower the farther from a player." Nothing expensive (AI tick
+		# interval, steering recompute, separation recompute) is touched
+		# here, so this costs nothing extra on average.
+		move_and_slide_with_snap(_smoothed_move_dir * _move_speed * move_scale + vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true, 4)
 		_moved_this_tick = true
+	else:
+		_smoothed_move_dir = Vector3.ZERO
+
 func updateVisibilityRelevance() -> void:
 	var forced_relevant:bool = is_in_combat or hasActiveSkillLock() or is_instance_valid(target_mob) or is_instance_valid(reviving_ally) or is_downed or isInPartyWithRealPlayer()
 	if forced_relevant:
@@ -2903,10 +3640,14 @@ func crawlTowardsNearestPlayer(delta:float) -> void:
 
 	var dir:Vector3 = to_target.normalized()
 	rotateBotTowards(dir, delta)
-	move_and_slide_with_snap(dir * crawl_speed + vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+	# delta here may already represent several accumulated physics ticks
+	# (see physicsProcessAuthority) -- crawl_speed is a per-second speed,
+	# so multiplying by delta directly (instead of relying on
+	# move_and_slide's fixed internal step) keeps total distance correct
+	# regardless of how many substeps were folded into this one call.
+	move_and_collide(dir * crawl_speed * delta)
 	_moved_this_tick = true
 	is_crawling_now = true
-
 
 func recomputeCrawlTarget() -> void:
 	var world = getMyWorld()
@@ -3012,7 +3753,7 @@ func deliverBotProximityChatToUIs(sender_name:String, message:String) -> void:
 	var chat_ui = _findLocalChatUIForBot()
 	if !is_instance_valid(chat_ui) or !("proxy_chatbox" in chat_ui):
 		return
-	chat_ui.proxy_chatbox.append_bbcode("[b]%s:[/b] %s\n" % [sender_name, message])
+	chat_ui.appendBoundedChatLine(chat_ui.proxy_chat_log, chat_ui.proxy_chatbox, "[b]%s:[/b] %s" % [sender_name, message])
 	if chat_ui.has_method("flashProxyButton"):
 		chat_ui.flashProxyButton()
 
@@ -3273,6 +4014,63 @@ func reactivateTree() -> void:
 var _idle_still_frames:int = 0
 var idle_anim_freeze_frames:int = 30
 var _anim_tree_idle_frozen:bool = false
+#func animationBOT(delta:float) -> void:
+#	if is_frozen:
+#		if animation_tree.active == true:
+#			animation_tree.active = false
+#		return
+#
+#	var active_lock = getActiveAnimLockName()
+#	var idle_and_stable = movement_mode == "idle" and !is_in_combat and active_lock == "" and !is_downed and !is_crawling_now
+#
+#	if idle_and_stable:
+#		_idle_still_frames += 1
+#		if _idle_still_frames >= idle_anim_freeze_frames:
+#			if animation_tree.active:
+#				setBotAnimParam("parameters/Movement/blend_amount", -1.0)
+#				setBotAnimParam("parameters/IsInCombat/blend_amount", 0.0)
+#				animation_tree.active = false
+#			_anim_tree_idle_frozen = true
+#			return
+#	else:
+#		_idle_still_frames = 0
+#		if _anim_tree_idle_frozen:
+#			animation_tree.active = true
+#			_anim_tree_idle_frozen = false
+#
+#	if !shouldRunFullAnimationThisFrame():
+#		return
+#
+#	if Engine.get_physics_frames() % 2 == 0:
+#		updateDownedAnimationBlends(delta)
+#
+#	if active_lock != "" and skill_animations.has(active_lock):
+#		var anim_data = skill_animations[active_lock]
+#		var new_anim = anim_data.get(weapons, anim_data.get(WeaponMode.NONE, ""))
+#		if new_anim != "" and skill_anim.animation != new_anim:
+#			skill_anim.animation = new_anim
+#		setBotAnimParam("parameters/SkillBlend/blend_amount", 1.0)
+#		setBotAnimParam("parameters/CombatSwitch/blend_amount", 1.0)
+#		setBotAnimParam("parameters/MeleeSkillSwitch/blend_amount", 1.0)
+#		animation_tree.active = true
+#		return
+#
+#	setBotAnimParam("parameters/SkillBlend/blend_amount", 0.0)
+#	setBotAnimParam("parameters/CombatSwitch/blend_amount", 0.0)
+#	setBotAnimParam("parameters/MeleeSkillSwitch/blend_amount", 0.0)
+#	setBotAnimParam("parameters/IsInCombat/blend_amount", 1.0 if is_in_combat else 0.0)
+#
+#	match movement_mode:
+#		"idle":
+#			setBotAnimParam("parameters/Movement/blend_amount", -1.0)
+#			if is_in_combat:
+#				setCombatIdleAnimation()
+#		"walk":
+#			setBotAnimParam("parameters/Movement/blend_amount", 0.0)
+#		"run":
+#			setBotAnimParam("parameters/Movement/blend_amount", 1.0)
+#
+#	animation_tree.active = true
 func animationBOT(delta:float) -> void:
 	if is_frozen:
 		if animation_tree.active == true:
@@ -3294,7 +4092,8 @@ func animationBOT(delta:float) -> void:
 	else:
 		_idle_still_frames = 0
 		if _anim_tree_idle_frozen:
-			animation_tree.active = true
+			if !animation_tree.active:
+				animation_tree.active = true
 			_anim_tree_idle_frozen = false
 
 	if !shouldRunFullAnimationThisFrame():
@@ -3311,7 +4110,8 @@ func animationBOT(delta:float) -> void:
 		setBotAnimParam("parameters/SkillBlend/blend_amount", 1.0)
 		setBotAnimParam("parameters/CombatSwitch/blend_amount", 1.0)
 		setBotAnimParam("parameters/MeleeSkillSwitch/blend_amount", 1.0)
-		animation_tree.active = true
+		if !animation_tree.active:
+			animation_tree.active = true
 		return
 
 	setBotAnimParam("parameters/SkillBlend/blend_amount", 0.0)
@@ -3329,8 +4129,8 @@ func animationBOT(delta:float) -> void:
 		"run":
 			setBotAnimParam("parameters/Movement/blend_amount", 1.0)
 
-	animation_tree.active = true
-
+	if !animation_tree.active:
+		animation_tree.active = true
 
 
 func updateDownedAnimationBlends(delta:float) -> void:
@@ -4186,12 +4986,45 @@ func lootCorpse(corpse:Node) -> void:
 	if !is_instance_valid(corpse_stats) or corpse_stats.health > 0:
 		return
 	var loot_list:Array = Global.generateLootForCorpse(corpse)
+	var shared_entries := []
 	for entry in loot_list:
 		var key := str(entry.get("item_key",""))
 		var qty := int(entry.get("quantity",0))
 		if key == "" or qty <= 0:
 			continue
 		bot_inventory[key] = int(bot_inventory.get(key,0)) + qty
+		shared_entries.append({"item_key": key, "category": str(entry.get("category","")), "quantity": qty})
+
+	if !shared_entries.empty():
+		var rid = int(corpse.respawn_id) if "respawn_id" in corpse else 0
+		var corpse_key := Global.mobKey(corpse) + "_" + str(rid)
+		Global.shareLootWithParty(entity_name, corpse_key, shared_entries)
+
+	if corpse.has_method("markLootedForFastRespawn"):
+		corpse.markLootedForFastRespawn()
+
+
+
+
+
+
+
+
+
+
+
+func receivePartyLootShare(loot_entries:Array) -> void:
+	for entry in loot_entries:
+		var key := str(entry.get("item_key",""))
+		var qty := int(entry.get("quantity",0))
+		if key == "" or qty <= 0:
+			continue
+		bot_inventory[key] = int(bot_inventory.get(key,0)) + qty
+
+
+
+
+
 func pickTraderApproachOffset() -> void:
 	var slot = Global.reserveTraderSlot(target_trader, self)
 	if slot == -1:

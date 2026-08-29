@@ -297,10 +297,11 @@ func entityInfo(body):
 		crossair_inspect_tween.interpolate_property(ap_bar, "value", ap_bar.value, ep, 0.3, Tween.TRANS_SINE, Tween.EASE_OUT)
 		crossair_inspect_tween.start()
 
-	var name_label = get_node_or_null("Name")
-	if is_instance_valid(name_label):
+	if body.is_in_group("Entity"):
 		if body.is_in_group("Player"):
-			name_label.text = entity_name_text
+			var level_text = str(entity_stats.level) if "level" in entity_stats else "?"
+			name_label.text =  body.entity_name + ": level " + level_text
+			
 		else:
 			var species_text = str(entity_stats.species) if "species" in entity_stats else "?"
 			var level_text = str(entity_stats.level) if "level" in entity_stats else "?"

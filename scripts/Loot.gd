@@ -102,7 +102,6 @@ func sameCorpseGroup(a:Array,b:Array) -> bool:
 	keys_a.sort()
 	keys_b.sort()
 	return keys_a==keys_b
-
 func lootAll():
 	if current_corpses.empty():
 		return
@@ -114,6 +113,8 @@ func lootAll():
 			existing_stackables[texture]=true
 		else:
 			free_slots+=1
+
+	var shared_by_corpse := {}
 
 	for grid_index in range(loot_grid.get_child_count()):
 		if grid_index>=displayed_loot_sources.size():
@@ -150,7 +151,7 @@ func lootAll():
 		if amount_to_take<=0:
 			continue
 
-		var actually_removed=consumeFromLootSources(sources,amount_to_take)
+		var actually_removed=consumeFromLootSourcesTracked(sources,amount_to_take,shared_by_corpse)
 		if actually_removed<=0:
 			continue
 
@@ -166,12 +167,77 @@ func lootAll():
 		else:
 			for i in range(amount_to_take):
 				Global.addNotStackableItem(inventory_grid,item,player.inventory.floating_text_parent)
-			free_slots-=amount_to_take
 
 	buildCombinedLootGrid()
 	player.inventory.updateInventory()
 	player.inventory.autoFixStackables()
-	saveData()
+	for corpse_key in shared_by_corpse.keys():
+		Global.shareLootWithParty(player.entity_name, corpse_key, shared_by_corpse[corpse_key])
+		notifyCorpseFullyLootedIfEmpty(corpse_key)
+func consumeFromLootSourcesTracked(sources:Array,amount:int,shared_by_corpse:Dictionary) -> int:
+	var remaining=amount
+	var removed=0
+	for source in sources:
+		if remaining<=0:
+			break
+		var corpse_key=source.get("corpse_key","")
+		var loot_index=int(source.get("loot_index",-1))
+		if corpse_key=="" or loot_index<0 or !corpse_loot_data.has(corpse_key):
+			continue
+		var loot_data=corpse_loot_data[corpse_key]
+		if loot_index>=loot_data.size():
+			continue
+		var entry=loot_data[loot_index]
+		var available=int(entry.get("quantity",0))
+		if available<=0:
+			continue
+		var take=min(available,remaining)
+		entry["quantity"]=available-take
+		loot_data[loot_index]=entry
+		corpse_loot_data[corpse_key]=loot_data
+		remaining-=take
+		removed+=take
+
+		var arr = shared_by_corpse.get(corpse_key, [])
+		arr.append({"item_key": str(entry.get("item_key","")), "category": str(entry.get("category","")), "quantity": take})
+		shared_by_corpse[corpse_key] = arr
+	return removed
+
+func notifyCorpseFullyLootedIfEmpty(corpse_key:String) -> void:
+	if !corpse_loot_data.has(corpse_key):
+		return
+	for entry in corpse_loot_data[corpse_key]:
+		if int(entry.get("quantity",0)) > 0:
+			return
+	var idx = current_corpse_keys.find(corpse_key)
+	if idx == -1 or idx >= current_corpses.size():
+		return
+	var corpse = current_corpses[idx]
+
+remote func receivePartyLootShare(loot_entries:Array, corpse_key:String) -> void:
+	if !is_instance_valid(player) or !player.has_method("isLocalPlayer") or !player.isLocalPlayer():
+		return
+	for entry in loot_entries:
+		var item_data = getLootItemData(str(entry.get("category","")), str(entry.get("item_key","")))
+		if item_data == null:
+			continue
+		var quantity = int(entry.get("quantity",0))
+		if quantity <= 0:
+			continue
+		var stackable = item_data.get("stackable", true)
+		if stackable:
+			Global.addStackableItem(inventory_grid, item_data, player.inventory.floating_text_parent, quantity)
+		else:
+			for i in range(quantity):
+				Global.addNotStackableItem(inventory_grid, item_data, player.inventory.floating_text_parent)
+
+	corpse_loot_data[corpse_key] = []
+	if visible and current_corpse_keys.has(corpse_key):
+		buildCombinedLootGrid()
+		updateSlots()
+	if is_instance_valid(player.inventory):
+		player.inventory.updateInventory()
+
 
 func calculateAvailableFromSources(sources:Array) -> int:
 	var total=0
@@ -332,8 +398,22 @@ func getDeadBodiesInArea() -> Array:
 		var dead = health<=0
 		if !dead:
 			continue
+		if !canLootCorpse(body):
+			continue
 		corpses.append(body)
 	return corpses
+func canLootCorpse(body) -> bool:
+	if !is_instance_valid(body) or !("stats" in body):
+		return false
+	var mob_stats = body.stats
+	if !is_instance_valid(mob_stats) or !("loot_owner_names" in mob_stats):
+		return true
+	if mob_stats.loot_owner_names.empty():
+		return true
+	return mob_stats.loot_owner_names.has(player.entity_name)
+
+
+
 
 func pruneEmptyCorpseLootData() -> void:
 	for key in corpse_loot_data.keys():
@@ -415,7 +495,7 @@ func checkForRevives():
 func getCorpseBaseKey(body):
 	if !is_instance_valid(body):
 		return "invalid"
-	return "id_" + str(body.get_instance_id())
+	return Global.mobKey(body)
 
 func getCorpseKey(body):
 	var base = getCorpseBaseKey(body)
@@ -450,11 +530,29 @@ func openCorpseLoots(corpses:Array):
 	for corpse in current_corpses:
 		var corpse_key=getCorpseKey(corpse)
 		if !corpse_loot_data.has(corpse_key):
-			var generated=Global.generateLootForCorpse(corpse)
-			corpse_loot_data[corpse_key]=generated if generated!=null else []
+			# FIX: a corpse's loot pool must only ever be generated ONCE,
+			# by whoever (player or bot) reaches it first. Without this,
+			# every player who opens loot on the same corpse independently
+			# rolled a brand new full loot table -- pure item duplication.
+			# "loot_claimed" is loot_claimedthe single shared flag on the corpse node
+			# itself that both this script and PlayerBOT.gd's lootCorpse()
+			# check/set, so whichever side gets there first wins and
+			# everyone after sees nothing left.
+			if "loot_claimed" in corpse and corpse.loot_claimed:
+				corpse_loot_data[corpse_key] = []
+			else:
+				if "loot_claimed" in corpse:
+					corpse.loot_claimed = true
+				var generated=Global.generateLootForCorpse(corpse)
+				corpse_loot_data[corpse_key]=generated if generated!=null else []
 	clearLootGrid()
 	buildCombinedLootGrid()
 	show()
+
+
+
+
+
 
 func buildCombinedLootGrid():
 	var combined={}
@@ -505,14 +603,14 @@ func buildCombinedLootGrid():
 		if is_instance_valid(extra_slot):
 			extra_slot.texture = null
 func getLootItemData(category:String,item_key:String):
-	var categories={"food":Global.food,"flasks":Global.flasks,"weapons":Global.weapons,"armors":Global.armors,"rings":Global.rings,"necklaces":Global.necklaces}
+	var categories={"food":Global.food,"flasks":Global.flasks,"weapons":Global.weapons,"armors":Global.armors,"rings":Global.rings,"necklaces":Global.necklaces,"resources":Global.resources}
 	if !categories.has(category):
 		return null
 	return categories[category].get(item_key,null)
 
 func loadLootIntoGrid(lootData):
 	ensureSlotCount(lootData.size())
-	var categories={"food":Global.food,"flasks":Global.flasks,"weapons":Global.weapons,"armors":Global.armors,"rings":Global.rings,"necklaces":Global.necklaces}
+	var categories={"food":Global.food,"flasks":Global.flasks,"weapons":Global.weapons,"armors":Global.armors,"rings":Global.rings,"necklaces":Global.necklaces,"resources":Global.resources}
 	for i in range(lootData.size()):
 		var holder=loot_grid.get_child(i)
 		var item=lootData[i]

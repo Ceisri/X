@@ -370,6 +370,8 @@ func checkStaleAnimLockGrace() -> void:
 		has_anim_lock = false
 		attack_waiting = false
 		_staleLockGraceStart = 0
+		_has_any_anim_lock_cache = false
+		_has_any_anim_lock_frame = -1
 
 
 # =============================================================================
@@ -487,47 +489,46 @@ var _cached_active_lock: int = -1
 var _last_anim_decision_frame: int = -1
 var _aiTickCounter:int = 0
 
+var _npc_substep_accum:int = 0
+var _last_npc_visual_frame:int = -1
+export var npc_substep_scale_cap:float = 6.0
+
 func _physics_process(delta: float) -> void:
-	mobPhyProcess(delta)
+	_npc_substep_accum += 1
+	var visual_frame:int = Engine.get_frames_drawn()
+	if visual_frame == _last_npc_visual_frame:
+		return
+	_last_npc_visual_frame = visual_frame
 
-## SECTION 8A — DECISION SCHEDULING.
-## Runs once per physics frame. Decides (via a cheap visual-frame-gated
-## counter, immune to physics-substep drift) whether this is a decision
-## tick, and if so calls [method runDecisionTick]. Movement/rotation
-## execution (section 8B, [method runMovementTick]) always runs every
-## physics frame regardless, which is what keeps motion smooth no matter
-## how throttled decisions are.
+	var substeps:int = clamp(_npc_substep_accum, 1, int(npc_substep_scale_cap))
+	var effective_delta:float = delta * float(substeps)
+	_npc_substep_accum = 0
+
+	mobPhyProcess(effective_delta)
+
+
 func mobPhyProcess(delta)->void:
-	_accumulated_delta += delta
-	var rawFrame: int = Engine.get_physics_frames()
-	var frame: int = rawFrame + _sync_offset
-	var visual_frame_now: int = Engine.get_frames_drawn()
-	var aiInterval: int = max(int(getAiTickIntervalCached()), 1)
-	var hasActiveLock: bool = hasAnyAnimLock()
-	var isDyingPlayback: bool = stats.health <= 0 and !is_dead
-
 	if get_tree().network_peer != null and !is_network_master():
 		applyMobPuppetState(delta)
 		return
 
-	# ---- Decision pass: throttled, expensive ----
-	if _is_relevant and visual_frame_now != _last_anim_decision_frame:
-		_last_anim_decision_frame = visual_frame_now
-		_aiTickCounter += 1
-		if hasActiveLock or isDyingPlayback or _aiTickCounter >= aiInterval:
-			_aiTickCounter = 0
-			runDecisionTick(delta)
-
-	if visual_frame_now == _last_processed_visual_frame:
-		return
-	_last_processed_visual_frame = visual_frame_now
-	_accumulated_delta = 0.0
+	var rawFrame:int = Engine.get_physics_frames()
+	var frame:int = rawFrame + _sync_offset
+	var aiInterval:int = max(int(getAiTickIntervalCached()), 1)
+	var hasActiveLock:bool = hasAnyAnimLock()
+	var isDyingPlayback:bool = stats.health <= 0 and !is_dead
+	if frame % 4 == 0:
+		if _is_relevant:
+			_aiTickCounter += 1
+			if hasActiveLock or isDyingPlayback or _aiTickCounter >= aiInterval:
+				_aiTickCounter = 0
+				runDecisionTick(delta)
 
 	if is_network_master():
 		if frame % 6 == 0:
 			Global.updatePosition(self)
 
-	if frame % 600 == 0:
+	if frame % 60 == 0:
 		respawn()
 
 	if stats.health <= 0:
@@ -537,41 +538,34 @@ func mobPhyProcess(delta)->void:
 			Global.markActive(self)
 
 	if target != null:
-		var combatInterval:int = int(combat_distance_refresh_interval)
-		if combatInterval < 1:
-			combatInterval = 1
+		var combatInterval:int = max(int(combat_distance_refresh_interval), 1)
 		if frame % combatInterval == 0:
 			updateCachedNearestPlayerDistFast()
 
 	setStatsFrozen(!_is_relevant and target == null)
 
 	if !is_dead and is_instance_valid(animation_tree):
-		animation_tree.active = _is_relevant
+		var wantActive:bool = _is_relevant
+		if animation_tree.active != wantActive:
+			animation_tree.active = wantActive
 
 	if target == null and !_is_relevant and !isDyingPlayback:
-		var hasLockNow: bool = false
-		for lockState in anim_locks:
-			if lockState:
-				hasLockNow = true
-				break
+		var hasLockNow:bool = hasActiveLock
 		if hasLockNow:
 			checkStaleAnimLockGrace()
-			hasLockNow = false
-			for lockState2 in anim_locks:
-				if lockState2:
-					hasLockNow = true
-					break
+			hasLockNow = hasAnyAnimLock()
 		else:
 			_staleLockGraceStart = 0
+
 		if !hasLockNow:
 			if !is_frozen:
 				freezeMob()
 			return
+
 		if frame % 6000 == 0:
 			unstuck()
 		return
 
-	# ---- Movement pass: every frame, cheap ----
 	runMovementTick(delta)
 
 	if frame % 120 == 0 and anim_locks[Lock.DIE]:
@@ -579,10 +573,14 @@ func mobPhyProcess(delta)->void:
 		if stats.health <= 0:
 			freezeAtDeathPose()
 		elif is_instance_valid(animation_tree):
-			animation_tree.active = _is_relevant
-
+			var wantActive2:bool = _is_relevant
+			if animation_tree.active != wantActive2:
+				animation_tree.active = wantActive2
 	if frame % aiInterval == 0:
 		cleanIframes()
+
+
+
 
 
 ## SECTION 8A cont. — the actual decision work: anim-lock bookkeeping,
@@ -608,59 +606,152 @@ func runDecisionTick(delta: float) -> void:
 ## and one physics call, safe at full per-frame rate for hundreds of
 ## simultaneous mobs.
 var _settle_skip_counter:int = 0
+var _last_movement_frame: int = -1
+#func runMovementTick(delta: float) -> void:
+#	var frame := Engine.get_physics_frames()
+#	var interval := visibilityCachedInterval
+#	if interval < 1: interval = 1
+#
+#	if frame == _last_movement_frame: return
+#	if frame - _last_movement_frame < interval: return
+#	_last_movement_frame = frame
+#
+#	var dt := delta * interval
+#
+#	if !is_dead: applyGravity()
+#
+#	if hasAnyAnimLock():
+#		if can_move:
+#			var velocity := rootMotion(dt)
+#			if velocity != Vector3.ZERO: move_and_slide(velocity, Vector3.UP)
+#		else:
+#			move_and_slide_with_snap(vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+#		return
+#
+#	if stats.health <= 0:
+#		move_and_slide_with_snap(vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+#		return
+#
+#	if _face_dir != Vector3.ZERO:
+#		var origin := global_transform.origin
+#		var lookPos := origin - _face_dir
+#		lookPos.y = origin.y
+#		var targetTransform := global_transform.looking_at(lookPos, Vector3.UP)
+#		var t := 1.0 - exp(-_face_turn_speed * dt)
+#		global_transform.basis = global_transform.basis.slerp(targetTransform.basis, t)
+#
+#	if _move_dir != Vector3.ZERO and can_move:
+#		_settle_skip_counter = 0
+#		move_and_slide_with_snap(_move_dir * _move_speed + vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+#		return
+#
+#	if is_on_floor() and vertical_velocity.length_squared() < 0.26:
+#		_settle_skip_counter += 1
+#		if _settle_skip_counter < 10: return
+#
+#	_settle_skip_counter = 0
+#	move_and_slide_with_snap(vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+
+#func runMovementTick(delta: float) -> void:
+#	var frame := Engine.get_physics_frames()
+#	var interval := visibilityCachedInterval
+#	if interval < 1: interval = 1
+#
+#	if frame == _last_movement_frame: return
+#	if frame - _last_movement_frame < interval: return
+#	_last_movement_frame = frame
+#
+#	var dt := delta * interval
+#
+#	if !is_dead: applyGravity()
+#
+#	if hasAnyAnimLock():
+#		if can_move:
+#			var velocity := rootMotion(dt)
+#			if velocity != Vector3.ZERO: move_and_slide(velocity, Vector3.UP)
+#		else:
+#			move_and_slide_with_snap(vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+#		return
+#
+#	if stats.health <= 0:
+#		move_and_slide_with_snap(vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+#		return
+#
+#	if _face_dir != Vector3.ZERO:
+#		var current_forward := -global_transform.basis.z
+#		if current_forward.dot(_face_dir) < 0.9995:
+#			var origin := global_transform.origin
+#			var lookPos := origin - _face_dir
+#			lookPos.y = origin.y
+#			var targetTransform := global_transform.looking_at(lookPos, Vector3.UP)
+#			var t := 1.0 - exp(-_face_turn_speed * dt)
+#			global_transform.basis = global_transform.basis.slerp(targetTransform.basis, t)
+#
+#	if _move_dir != Vector3.ZERO and can_move:
+#		_settle_skip_counter = 0
+#		move_and_slide_with_snap(_move_dir * _move_speed + vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+#		return
+#
+#	if is_on_floor() and vertical_velocity.length_squared() < 0.26:
+#		_settle_skip_counter += 1
+#		if _settle_skip_counter < 10: return
+#
+#	_settle_skip_counter = 0
+#	move_and_slide_with_snap(vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+#
+
 
 func runMovementTick(delta: float) -> void:
-	var frame = Engine.get_physics_frames()
-	if frame % 18 == 0:
-		if is_dead == false:
-			applyGravity()
+	var frame := Engine.get_physics_frames()
+	var interval := visibilityCachedInterval
+	if interval < 1: interval = 1
 
-	# Mid-attack: root motion drives the body, free movement is suppressed.
+	if frame == _last_movement_frame: return
+	if frame - _last_movement_frame < interval: return
+	_last_movement_frame = frame
+
+	var dt := delta * interval
+
+	if !is_dead: applyGravity()
+
 	if hasAnyAnimLock():
 		if can_move:
-			var velocity: Vector3 = rootMotion(delta)
-			if velocity != Vector3.ZERO:
-				move_and_slide(velocity, Vector3.UP)
+			var velocity := rootMotion(dt)
+			if velocity != Vector3.ZERO: move_and_slide(velocity, Vector3.UP)
 		else:
-			# Locked but not root-motion-driven (flinch/knockdown, etc) --
-			# resting under gravity, same category as idle below. Must be
-			# snapped or it slides down any slope over the lock's duration.
 			move_and_slide_with_snap(vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
 		return
 
 	if stats.health <= 0:
-		# Corpse resting under gravity -- snap so it doesn't creep down slopes forever.
 		move_and_slide_with_snap(vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
 		return
 
+	var origin := global_transform.origin
+
 	if _face_dir != Vector3.ZERO:
-		var origin: Vector3 = global_transform.origin
-		var lookPos: Vector3 = origin - _face_dir
-		lookPos.y = origin.y
-		var targetTransform: Transform = global_transform.looking_at(lookPos, Vector3.UP)
-		global_transform.basis = global_transform.basis.slerp(targetTransform.basis, delta * _face_turn_speed * 60.0 * 0.05)
+		var current_forward := -global_transform.basis.z
+		if current_forward.dot(_face_dir) < 0.9995:
+			var lookPos := origin - _face_dir
+			lookPos.y = origin.y
+			var targetTransform := global_transform.looking_at(lookPos, Vector3.UP)
+			var t := 1.0 - exp(-_face_turn_speed * dt)
+			global_transform.basis = global_transform.basis.slerp(targetTransform.basis, t)
 
 	if _move_dir != Vector3.ZERO and can_move:
 		_settle_skip_counter = 0
 		move_and_slide_with_snap(_move_dir * _move_speed + vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
 		return
 
-	# Idle / resting: THIS branch is what was sliding mobs down slopes --
-	# it used to be a bare move_and_slide(vertical_velocity, UP) with no
-	# snap and no stop_on_slope, called every single frame for every
-	# unfrozen idle mob instead of almost never like the old throttled code.
 	if is_on_floor() and vertical_velocity.length_squared() < 0.26:
-		# Fully settled (grounded, resting at the constant grounded
-		# downward velocity) -- skip the physics call entirely most
-		# frames instead of paying for move_and_slide on a body that
-		# isn't going anywhere. Same settle-skip pattern PlayerBOT.gd
-		# already uses. Still re-grounds periodically in case the mob
-		# got pushed/the floor moved out from under it.
 		_settle_skip_counter += 1
-		if _settle_skip_counter < 10:
-			return
+		if _settle_skip_counter < 10: return
+
 	_settle_skip_counter = 0
 	move_and_slide_with_snap(vertical_velocity, Vector3.DOWN * 0.3, Vector3.UP, true)
+
+
+
+
 
 # =============================================================================
 # SECTION 9 — WORLD / ENTITY CACHE
@@ -855,17 +946,56 @@ func cancelRootMotionOnFrozenPose(rootMotionTrack: NodePath) -> void:
 	pose.origin = rest.origin
 	skeleton.set_bone_pose(boneIdx, pose)
 
+#func animLockOrder() -> void:
+#	if stats.health <= 0:
+#		stats.getReleased()
+#		setAnimParam("parameters/IsAlive/blend_amount", 1)
+#		can_move = false
+#		if is_dead == false or just_loaded_dead_grace > 0:
+#			animation_tree.active = true
+#			if just_loaded_dead_grace > 0:
+#				just_loaded_dead_grace -= 1
+#		else:
+#			animation_tree.active = false
+#	else:
+#		setAnimParam("parameters/IsAlive/blend_amount", 0)
+#		if anim_locks[Lock.KNOCKED_DOWN] == true:
+#			setAnimParam("parameters/Interuption/blend_amount", 1)
+#			setAnimParam("parameters/React/blend_amount", 0)
+#			can_move = false
+#		elif anim_locks[Lock.KNOCKED_BACK] == true:
+#			setAnimParam("parameters/Interuption/blend_amount", 1)
+#			setAnimParam("parameters/React/blend_amount", -1)
+#			can_move = false
+#		elif anim_locks[Lock.FLINCH] == true:
+#			setAnimParam("parameters/Interuption/blend_amount", 1)
+#			setAnimParam("parameters/React/blend_amount", 1)
+#			can_move = false
+#		else:
+#			setAnimParam("parameters/Interuption/blend_amount", 0)
+#			can_move = true
+#	if movement_mode == "run":
+#		setAnimParam("parameters/Interuption/blend_amount", 0)
+#		setAnimParam("parameters/Interraction/blend_amount", 0)
+#		setAnimParam("parameters/Movement/blend_amount", 1)
+#		anim_locks[Lock.KNOCKED_DOWN] = false
+#		anim_locks[Lock.KNOCKED_BACK] = false
+#		anim_locks[Lock.FLINCH] = false
+#		anim_locks[Lock.FLINCH_BACK] = false
+#		can_move = true
 func animLockOrder() -> void:
 	if stats.health <= 0:
 		stats.getReleased()
 		setAnimParam("parameters/IsAlive/blend_amount", 1)
 		can_move = false
 		if is_dead == false or just_loaded_dead_grace > 0:
-			animation_tree.active = true
+			if !animation_tree.active:
+				animation_tree.active = true
 			if just_loaded_dead_grace > 0:
 				just_loaded_dead_grace -= 1
 		else:
-			animation_tree.active = false
+			if animation_tree.active:
+				animation_tree.active = false
 	else:
 		setAnimParam("parameters/IsAlive/blend_amount", 0)
 		if anim_locks[Lock.KNOCKED_DOWN] == true:
@@ -893,16 +1023,21 @@ func animLockOrder() -> void:
 		anim_locks[Lock.FLINCH_BACK] = false
 		can_move = true
 
-
 # =============================================================================
 # SECTION 13 — RESPAWN
 # =============================================================================
-var respawn_time: float = 3
+var respawn_time: float = 12
 export var max_respawn_time: float = 6
 export var can_respawn: bool = true
 var respawn_id: int = 0
 var spawn_point: Spatial
 var hadTargetRecentlyUntil: int = 0
+
+var _looted_fast_respawn_at_ms:int = 0
+export var looted_fast_respawn_seconds:float = 4.0
+
+
+var loot_claimed: bool = false
 
 func respawn() -> void:
 	if stats.health > 0:
@@ -911,6 +1046,8 @@ func respawn() -> void:
 		respawn_time -= 1
 		clearAggro()
 		resetCooldowns()
+		if loot_claimed == true:
+			respawn_time  -= 2
 	if respawn_time <= 0:
 		if can_respawn:
 			respawn_id += 1
@@ -923,6 +1060,9 @@ func respawn() -> void:
 			stats.health = stats.max_health
 			stats.arcane = stats.max_arcane
 			stats.energy = stats.max_energy
+			stats.loot_owner_names = []
+			loot_claimed = false
+			_looted_fast_respawn_at_ms = 0
 			respawn_time = max_respawn_time
 			clearAggro()
 			resetCooldowns()
@@ -931,7 +1071,7 @@ func respawn() -> void:
 
 			if spawn_point and is_instance_valid(spawn_point):
 				var spawnPos: Vector3 = spawn_point.global_transform.origin
-				global_transform.origin = Vector3(spawnPos.x + rand_range(-5, 5), spawnPos.y + 0.1, spawnPos.z + rand_range(-5, 5))
+				global_transform.origin = Vector3(spawnPos.x + rand_range(-15, 15), spawnPos.y + 0.1, spawnPos.z + rand_range(-15, 15))
 				snapToFloorInstantly()
 			if is_frozen:
 				unfreezeMob()
@@ -941,6 +1081,7 @@ func respawn() -> void:
 			hadTargetRecentlyUntil = OS.get_ticks_msec() + 2000
 		else:
 			queue_free()
+
 
 func snapToFloorInstantly() -> void:
 	var space_state = get_world().direct_space_state
@@ -972,6 +1113,415 @@ func rootMotion(delta: float) -> Vector3:
 # =============================================================================
 # SECTION 14 — COMBAT / SKILL SELECTION
 # =============================================================================
+var _cached_skill_for_ranged:String = ""
+var _cached_ranged_flag:bool = false
+func isCurrentSkillRangedCached(skill_name:String) -> bool:
+	if skill_name != _cached_skill_for_ranged:
+		_cached_skill_for_ranged = skill_name
+		_cached_ranged_flag = skill_name != "" and Global.skills.has(skill_name) and Global.isRanged(skill_name)
+	return _cached_ranged_flag
+#func combat(delta: float, activeLock: int) -> void:
+#	if stats.health <= 0:
+#		for i in range(anim_locks.size()):
+#			if i != Lock.DIE:
+#				anim_locks[i] = false
+#		_move_dir = Vector3.ZERO
+#		_face_dir = Vector3.ZERO
+#		return
+#
+#	if stats.debuff_buffs_active.has("stunned") and float(stats.debuff_buffs_active["stunned"].get("duration", 0.0)) > 0.0:
+#		_move_dir = Vector3.ZERO
+#		return
+#
+#	if target == null or !is_instance_valid(target):
+#		target_history.clear()
+#		usingDelayedTarget = false
+#		movement_mode = "idle"
+#		melee_entered = false
+#		chaseOffset = Vector3.ZERO
+#		lastOffsetTarget = Vector3.ZERO
+#		current_skill = ""
+#		_move_dir = Vector3.ZERO
+#		_face_dir = Vector3.ZERO
+#		return
+#
+#	stuckDetection(activeLock)
+#	updateTargetHistory(target)
+#
+#	if !detection_area.monitoring:
+#		detection_area.monitoring = true
+#	if !damage_area.monitoring:
+#		damage_area.monitoring = true
+#
+#	var origin: Vector3 = global_transform.origin
+#	var realTarget: Vector3 = target.global_transform.origin
+#
+#	var hasLock := hasAnyAnimLock()
+#
+#	if hasLock:
+#		movement_mode = "idle"
+#		setAnimParam("parameters/Interraction/blend_amount", 1)
+#		_move_dir = Vector3.ZERO
+#		_face_dir = Vector3.ZERO
+#		return
+#
+#	var rangedSkill: bool = isCurrentSkillRangedCached(current_skill)
+#
+#	if rangedSkill:
+#		melee_entered = false
+#		var isUnrestricted: bool = Global.support_skills.has(current_skill) and Global.skill_ranges.get(current_skill, true) != false
+#		if ranged_detection_area != null:
+#			if isUnrestricted or getRangedOverlapsCached().has(target):
+#				movement_mode = "idle"
+#				setAnimParam("parameters/Interraction/blend_amount", 1)
+#				_move_dir = Vector3.ZERO
+#				_face_dir = (realTarget - origin)
+#				_face_dir.y = 0.0
+#				if _face_dir.length_squared() > 0.0001:
+#					_face_dir = _face_dir.normalized()
+#				else:
+#					_face_dir = Vector3.ZERO
+#				_face_turn_speed = turn_speed
+#				return
+#	else:
+#		var isUnrestrictedMelee: bool = Global.support_skills.has(current_skill) and Global.skill_ranges.get(current_skill, true) != false
+#		var targetInMeleeRange: bool = isUnrestrictedMelee or getMeleeOverlapsCached().has(target)
+#		if targetInMeleeRange:
+#			melee_entered = true
+#			movement_mode = "idle"
+#			setAnimParam("parameters/Interraction/blend_amount", 1)
+#			_move_dir = Vector3.ZERO
+#			_face_dir = (realTarget - origin)
+#			_face_dir.y = 0.0
+#			if _face_dir.length_squared() > 0.0001:
+#				_face_dir = _face_dir.normalized()
+#			else:
+#				_face_dir = Vector3.ZERO
+#			_face_turn_speed = turn_speed
+#			return
+#
+#	var wantActive:bool = stats.health > 0
+#	if animation_tree.active != wantActive:
+#		animation_tree.active = wantActive
+#	if is_dead == false:
+#		setAnimParam("parameters/Interraction/blend_amount", 0)
+#
+#	var direction: Vector3 = realTarget - origin
+#	direction.y = 0
+#
+#	if direction.length_squared() <= 0.001:
+#		movement_mode = "idle"
+#		_move_dir = Vector3.ZERO
+#		_face_dir = Vector3.ZERO
+#		return
+#
+#	stats.getReleased()
+#
+#	var isClose := false
+#	if rangedSkill:
+#		isClose = getRangedOverlapsCached().has(target)
+#	else:
+#		isClose = getMeleeOverlapsCached().has(target)
+#
+#	if !isClose:
+#		walk_timer = 0.17
+#
+#	var dirNorm: Vector3 = direction.normalized()
+#	_face_dir = dirNorm
+#
+#	if walk_timer > 0.0:
+#		walk_timer -= delta
+#		movement_mode = "run"
+#		_face_turn_speed = run_turn_speed
+#		_move_dir = dirNorm
+#		_move_speed = stats.run_speed
+#	else:
+#		movement_mode = "walk"
+#		_face_turn_speed = turn_speed
+#		_move_dir = dirNorm
+#		_move_speed = stats.walk_speed
+
+#func combat(delta: float, activeLock: int) -> void:
+#	if stats.health <= 0:
+#		for i in range(anim_locks.size()):
+#			if i != Lock.DIE:
+#				anim_locks[i] = false
+#		_move_dir = Vector3.ZERO
+#		_face_dir = Vector3.ZERO
+#		return
+#
+#	if stats.debuff_buffs_active.has("stunned") and float(stats.debuff_buffs_active["stunned"].get("duration", 0.0)) > 0.0:
+#		_move_dir = Vector3.ZERO
+#		return
+#
+#	if target == null or !is_instance_valid(target):
+#		target_history.clear()
+#		usingDelayedTarget = false
+#		movement_mode = "idle"
+#		melee_entered = false
+#		chaseOffset = Vector3.ZERO
+#		lastOffsetTarget = Vector3.ZERO
+#		current_skill = ""
+#		_move_dir = Vector3.ZERO
+#		_face_dir = Vector3.ZERO
+#		return
+#
+#	stuckDetection(activeLock)
+#	updateTargetHistory(target)
+#
+#	if !detection_area.monitoring:
+#		detection_area.monitoring = true
+#	if !damage_area.monitoring:
+#		damage_area.monitoring = true
+#
+#	var origin: Vector3 = global_transform.origin
+#	var realTarget: Vector3 = target.global_transform.origin
+#
+#	var hasLock := hasAnyAnimLock()
+#
+#	if hasLock:
+#		movement_mode = "idle"
+#		setAnimParam("parameters/Interraction/blend_amount", 1)
+#		_move_dir = Vector3.ZERO
+#		_face_dir = Vector3.ZERO
+#		return
+#
+#	var rangedSkill: bool = isCurrentSkillRangedCached(current_skill)
+#
+#	# compute the "target within range" bool ONCE, reused everywhere below
+#	var isClose: bool = false
+#	if rangedSkill:
+#		isClose = getRangedOverlapsCached().has(target)
+#	else:
+#		isClose = getMeleeOverlapsCached().has(target)
+#
+#	if rangedSkill:
+#		melee_entered = false
+#		var isUnrestricted: bool = Global.support_skills.has(current_skill) and Global.skill_ranges.get(current_skill, true) != false
+#		if ranged_detection_area != null:
+#			if isUnrestricted or isClose:
+#				movement_mode = "idle"
+#				setAnimParam("parameters/Interraction/blend_amount", 1)
+#				_move_dir = Vector3.ZERO
+#				_face_dir = (realTarget - origin)
+#				_face_dir.y = 0.0
+#				if _face_dir.length_squared() > 0.0001:
+#					_face_dir = _face_dir.normalized()
+#				else:
+#					_face_dir = Vector3.ZERO
+#				_face_turn_speed = turn_speed
+#				return
+#	else:
+#		var isUnrestrictedMelee: bool = Global.support_skills.has(current_skill) and Global.skill_ranges.get(current_skill, true) != false
+#		if isUnrestrictedMelee or isClose:
+#			melee_entered = true
+#			movement_mode = "idle"
+#			setAnimParam("parameters/Interraction/blend_amount", 1)
+#			_move_dir = Vector3.ZERO
+#			_face_dir = (realTarget - origin)
+#			_face_dir.y = 0.0
+#			if _face_dir.length_squared() > 0.0001:
+#				_face_dir = _face_dir.normalized()
+#			else:
+#				_face_dir = Vector3.ZERO
+#			_face_turn_speed = turn_speed
+#			return
+#
+#	var wantActive:bool = stats.health > 0
+#	if animation_tree.active != wantActive:
+#		animation_tree.active = wantActive
+#	if is_dead == false:
+#		setAnimParam("parameters/Interraction/blend_amount", 0)
+#
+#	var direction: Vector3 = realTarget - origin
+#	direction.y = 0
+#
+#	if direction.length_squared() <= 0.001:
+#		movement_mode = "idle"
+#		_move_dir = Vector3.ZERO
+#		_face_dir = Vector3.ZERO
+#		return
+#
+#	stats.getReleased()
+#
+#	if !isClose:
+#		walk_timer = 0.17
+#
+#	var dirNorm: Vector3 = direction.normalized()
+#	_face_dir = dirNorm
+#
+#	if walk_timer > 0.0:
+#		walk_timer -= delta
+#		movement_mode = "run"
+#		_face_turn_speed = run_turn_speed
+#		_move_dir = dirNorm
+#		_move_speed = stats.run_speed
+#	else:
+#		movement_mode = "walk"
+#		_face_turn_speed = turn_speed
+#		_move_dir = dirNorm
+#		_move_speed = stats.walk_speed
+
+
+
+
+func combat(delta: float, activeLock: int) -> void:
+	if stats.health <= 0:
+		for i in range(anim_locks.size()):
+			if i != Lock.DIE:
+				anim_locks[i] = false
+		_move_dir = Vector3.ZERO
+		_face_dir = Vector3.ZERO
+		return
+
+	if stats.debuff_buffs_active.has("stunned") and float(stats.debuff_buffs_active["stunned"].get("duration", 0.0)) > 0.0:
+		_move_dir = Vector3.ZERO
+		return
+
+	if target == null or !is_instance_valid(target):
+		target_history.clear()
+		usingDelayedTarget = false
+		movement_mode = "idle"
+		melee_entered = false
+		chaseOffset = Vector3.ZERO
+		lastOffsetTarget = Vector3.ZERO
+		current_skill = ""
+		_move_dir = Vector3.ZERO
+		_face_dir = Vector3.ZERO
+		return
+
+	stuckDetection(activeLock)
+	updateTargetHistory(target)
+
+	if !detection_area.monitoring:
+		detection_area.monitoring = true
+	if !damage_area.monitoring:
+		damage_area.monitoring = true
+
+	var origin: Vector3 = global_transform.origin
+	var realTarget: Vector3 = target.global_transform.origin
+
+	var hasLock := hasAnyAnimLock()
+
+	if hasLock:
+		movement_mode = "idle"
+		setAnimParam("parameters/Interraction/blend_amount", 1)
+		_move_dir = Vector3.ZERO
+		_face_dir = Vector3.ZERO
+		return
+
+	var rangedSkill: bool = isCurrentSkillRangedCached(current_skill)
+	var direction: Vector3 = realTarget - origin
+	direction.y = 0
+
+	if rangedSkill:
+		melee_entered = false
+		var isUnrestricted: bool = Global.support_skills.has(current_skill) and Global.skill_ranges.get(current_skill, true) != false
+		if ranged_detection_area != null:
+			if isUnrestricted or getRangedOverlapsCached().has(target):
+				movement_mode = "idle"
+				setAnimParam("parameters/Interraction/blend_amount", 1)
+				_move_dir = Vector3.ZERO
+				if direction.length_squared() > 0.0001:
+					_face_dir = direction.normalized()
+				else:
+					_face_dir = Vector3.ZERO
+				_face_turn_speed = turn_speed
+				return
+	else:
+		var isUnrestrictedMelee: bool = Global.support_skills.has(current_skill) and Global.skill_ranges.get(current_skill, true) != false
+		var targetInMeleeRange: bool = isUnrestrictedMelee or getMeleeOverlapsCached().has(target)
+		if targetInMeleeRange:
+			melee_entered = true
+			movement_mode = "idle"
+			setAnimParam("parameters/Interraction/blend_amount", 1)
+			_move_dir = Vector3.ZERO
+			if direction.length_squared() > 0.0001:
+				_face_dir = direction.normalized()
+			else:
+				_face_dir = Vector3.ZERO
+			_face_turn_speed = turn_speed
+			return
+
+	var wantActive:bool = stats.health > 0
+	if animation_tree.active != wantActive:
+		animation_tree.active = wantActive
+	if is_dead == false:
+		setAnimParam("parameters/Interraction/blend_amount", 0)
+
+	if direction.length_squared() <= 0.001:
+		movement_mode = "idle"
+		_move_dir = Vector3.ZERO
+		_face_dir = Vector3.ZERO
+		return
+
+	stats.getReleased()
+
+	var isClose := false
+	if rangedSkill:
+		isClose = getRangedOverlapsCached().has(target)
+	else:
+		isClose = getMeleeOverlapsCached().has(target)
+
+	if !isClose:
+		walk_timer = 0.17
+
+	var dirNorm: Vector3 = direction.normalized()
+	_face_dir = dirNorm
+
+	if walk_timer > 0.0:
+		walk_timer -= delta
+		movement_mode = "run"
+		_face_turn_speed = run_turn_speed
+		_move_dir = dirNorm
+		_move_speed = stats.run_speed
+	else:
+		movement_mode = "walk"
+		_face_turn_speed = turn_speed
+		_move_dir = dirNorm
+		_move_speed = stats.walk_speed
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+var _cachedMeleeOverlaps: Array = []
+var _cachedMeleeOverlapsFrame: int = -1
+var _cachedRangedOverlaps: Array = []
+var _cachedRangedOverlapsFrame: int = -1
+
+func getMeleeOverlapsCached() -> Array:
+	var frame: int = Engine.get_physics_frames()
+	if frame != _cachedMeleeOverlapsFrame:
+		_cachedMeleeOverlapsFrame = frame
+		_cachedMeleeOverlaps = detection_area.get_overlapping_bodies()
+	return _cachedMeleeOverlaps
+
+func getRangedOverlapsCached() -> Array:
+	if ranged_detection_area == null:
+		return []
+	var frame: int = Engine.get_physics_frames()
+	if frame != _cachedRangedOverlapsFrame:
+		_cachedRangedOverlapsFrame = frame
+		_cachedRangedOverlaps = ranged_detection_area.get_overlapping_bodies()
+	return _cachedRangedOverlaps
 var last_active_skill: String = ""
 var attack_pattern: Array = []
 var attack_pattern_index: int = 0
@@ -1005,13 +1555,12 @@ func startCooldown(skillName: String) -> void:
 		skill_cooldowns[path] = cd
 
 func updateCooldowns() -> void:
-	var toRemove: Array = []
 	for path in skill_cooldowns.keys():
-		skill_cooldowns[path] -= 1
-		if skill_cooldowns[path] <= 0.0:
-			toRemove.append(path)
-	for p in toRemove:
-		skill_cooldowns.erase(p)
+		var remaining: float = skill_cooldowns[path] - 1.0
+		if remaining <= 0.0:
+			skill_cooldowns.erase(path)
+		else:
+			skill_cooldowns[path] = remaining
 
 func sortCooldownDesc(a, b) -> bool:
 	return a.cooldown > b.cooldown
@@ -1122,11 +1671,10 @@ func syncAnimLockAnimation(active: int) -> void:
 		lastLock = animName
 		skill_anim.animation = animName
 
-export var ranged_aim_dot_threshold: float = 0.85
-export var ranged_aim_max_wait_ms: float = 700.0
+var ranged_aim_dot_threshold: float = 0.85
+var ranged_aim_max_wait_ms: float = 700.0
 var rangedAimWaitStart: int = 0
 var rangedAimSkillTracked: String = ""
-
 func combatAnimations() -> void:
 	if stats.debuff_buffs_active.has("stunned") and float(stats.debuff_buffs_active["stunned"].get("duration", 0.0)) > 0.0:
 		return
@@ -1189,12 +1737,12 @@ func combatAnimations() -> void:
 			return
 		var isUnrestricted: bool = Global.support_skills.has(skillName) and Global.skill_ranges.get(skillName, true) != false
 		if ranged_detection_area != null:
-			if !isUnrestricted and !ranged_detection_area.get_overlapping_bodies().has(target):
+			if !isUnrestricted and !getRangedOverlapsCached().has(target):
 				forceIdleAnimBlend()
 				return
 	else:
 		var isUnrestrictedMelee: bool = Global.support_skills.has(skillName) and Global.skill_ranges.get(skillName, true) != false
-		if !isUnrestrictedMelee and !detection_area.get_overlapping_bodies().has(target):
+		if !isUnrestrictedMelee and !getMeleeOverlapsCached().has(target):
 			return
 
 	if !Global.skills.has(skillName):
@@ -1245,7 +1793,6 @@ func combatAnimations() -> void:
 
 	startCooldown(skillName)
 	setAnimationSpeed()
-
 var _combat_idle_forced := false
 
 func forceCombatIdle() -> void:
@@ -1291,8 +1838,7 @@ func switchState(delta: float, activeLock: int) -> void:
 	var frame: int = rawFrame + _sync_offset
 
 	if frame % 120 == 0:
-		cleanupAggrotargets()
-		cleanupDeadAggro()
+		cleanupAggroAndDeadTargetsMerged()
 		aggro_changed = true
 
 	if aggro_changed:
@@ -1344,8 +1890,8 @@ var resume_chase_time: int = 0
 var melee_entered: bool = true
 
 var side_history: Array = []
-export var side_check_frames: int = 30
-export var side_dot_threshold: float = 0.6
+var side_check_frames: int = 30
+var side_dot_threshold: float = 0.6
 var flanking: bool = false
 var flank_target: Vector3 = Vector3.ZERO
 var flank_timeout: int = 0
@@ -1353,144 +1899,11 @@ export var flank_min_distance: float = 12.0
 export var flank_max_distance: float = 32.0
 var walk_timer: float = 0.0
 
-## Decision-tick combat logic. Determines whether the mob should stand
-## and fight (melee/ranged range reached) or close distance, and writes
-## that choice into [member _move_dir] / [member _move_speed] /
-## [member _face_dir] for the per-frame movement pass to execute
-## smoothly and continuously. This function itself is still throttled
-## to the decision cadence — it contains the expensive area-overlap
-## queries — but it no longer performs the movement itself.
-func combat(delta: float, activeLock: int) -> void:
-	if stats.health <= 0:
-		for i in range(anim_locks.size()):
-			if i != Lock.DIE:
-				anim_locks[i] = false
-		_move_dir = Vector3.ZERO
-		_face_dir = Vector3.ZERO
-		return
-
-	if stats.debuff_buffs_active.has("stunned") and float(stats.debuff_buffs_active["stunned"].get("duration", 0.0)) > 0.0:
-		_move_dir = Vector3.ZERO
-		return
-
-	if target == null or !is_instance_valid(target):
-		target_history.clear()
-		usingDelayedTarget = false
-		movement_mode = "idle"
-		melee_entered = false
-		chaseOffset = Vector3.ZERO
-		lastOffsetTarget = Vector3.ZERO
-		current_skill = ""
-		_move_dir = Vector3.ZERO
-		_face_dir = Vector3.ZERO
-		return
-
-	stuckDetection(activeLock)
-	updateTargetHistory(target)
-
-	if !detection_area.monitoring:
-		detection_area.monitoring = true
-	if !damage_area.monitoring:
-		damage_area.monitoring = true
-
-	var origin: Vector3 = global_transform.origin
-	var realTarget: Vector3 = target.global_transform.origin
-
-	var hasLock := false
-	for i in range(anim_locks.size()):
-		if anim_locks[i]:
-			hasLock = true
-			break
-
-	if hasLock:
-		movement_mode = "idle"
-		setAnimParam("parameters/Interraction/blend_amount", 1)
-		_move_dir = Vector3.ZERO
-		_face_dir = Vector3.ZERO
-		return
-
-	var rangedSkill: bool = false
-	if current_skill != "" and Global.skills.has(current_skill):
-		rangedSkill = Global.isRanged(current_skill)
-
-	if rangedSkill:
-		melee_entered = false
-		var isUnrestricted: bool = Global.support_skills.has(current_skill) and Global.skill_ranges.get(current_skill, true) != false
-		if ranged_detection_area != null:
-			if isUnrestricted or ranged_detection_area.get_overlapping_bodies().has(target):
-				movement_mode = "idle"
-				setAnimParam("parameters/Interraction/blend_amount", 1)
-				_move_dir = Vector3.ZERO
-				_face_dir = (realTarget - origin)
-				_face_dir.y = 0.0
-				if _face_dir.length_squared() > 0.0001:
-					_face_dir = _face_dir.normalized()
-				else:
-					_face_dir = Vector3.ZERO
-				_face_turn_speed = turn_speed
-				return
-	else:
-		var isUnrestrictedMelee: bool = Global.support_skills.has(current_skill) and Global.skill_ranges.get(current_skill, true) != false
-		var targetInMeleeRange: bool = isUnrestrictedMelee or detection_area.get_overlapping_bodies().has(target)
-		if targetInMeleeRange:
-			melee_entered = true
-			movement_mode = "idle"
-			setAnimParam("parameters/Interraction/blend_amount", 1)
-			_move_dir = Vector3.ZERO
-			_face_dir = (realTarget - origin)
-			_face_dir.y = 0.0
-			if _face_dir.length_squared() > 0.0001:
-				_face_dir = _face_dir.normalized()
-			else:
-				_face_dir = Vector3.ZERO
-			_face_turn_speed = turn_speed
-			return
-
-	animation_tree.active = stats.health > 0
-	if is_dead == false:
-		animation_tree.active = true
-		setAnimParam("parameters/Interraction/blend_amount", 0)
-
-	var direction: Vector3 = realTarget - origin
-	direction.y = 0
-
-	if direction.length_squared() <= 0.001:
-		movement_mode = "idle"
-		_move_dir = Vector3.ZERO
-		_face_dir = Vector3.ZERO
-		return
-
-	stats.getReleased()
-
-	var isClose := false
-	if rangedSkill:
-		isClose = ranged_detection_area.get_overlapping_bodies().has(target)
-	else:
-		isClose = detection_area.get_overlapping_bodies().has(target)
-
-	if !isClose:
-		walk_timer = 0.17
-
-	var dirNorm: Vector3 = direction.normalized()
-	_face_dir = dirNorm
-
-	if walk_timer > 0.0:
-		walk_timer -= delta
-		movement_mode = "run"
-		_face_turn_speed = run_turn_speed
-		_move_dir = dirNorm
-		_move_speed = stats.run_speed
-	else:
-		movement_mode = "walk"
-		_face_turn_speed = turn_speed
-		_move_dir = dirNorm
-		_move_speed = stats.walk_speed
 
 
 var separationResult: Vector3 = Vector3.ZERO
 var separationNextFrame: int = 0
-export var separation_recalc_interval: int = 6
-
+var separation_recalc_interval: int = 6
 func applySeparation(baseTarget: Vector3) -> Vector3:
 	if Engine.get_physics_frames() < separationNextFrame:
 		return separationResult
@@ -1500,17 +1913,20 @@ func applySeparation(baseTarget: Vector3) -> Vector3:
 	var targetPosition: Vector3 = result
 	targetPosition.y = 0
 
-	for node in cached_entities:
-		if !is_instance_valid(node) or node == self or !(node is KinematicBody):
-			continue
-		var npcPosition: Vector3 = node.global_transform.origin
-		npcPosition.y = 0
-		if npcPosition.distance_squared_to(targetPosition) < 2.25:
-			var separation: Vector3 = targetPosition - npcPosition
-			if separation.length_squared() < 0.0001:
-				separation = Vector3(rand_range(-1, 1), 0, rand_range(-1, 1))
-			separation = separation.normalized()
-			result += separation * 3.0
+	var world = getMyWorld()
+	if is_instance_valid(world) and "world_id" in world:
+		var origin: Vector3 = global_transform.origin
+		for node in Global.queryRadius(world.world_id, origin, 1.5):
+			if node == self or !(node is KinematicBody):
+				continue
+			var npcPosition: Vector3 = node.global_transform.origin
+			npcPosition.y = 0
+			if npcPosition.distance_squared_to(targetPosition) < 2.25:
+				var separation: Vector3 = targetPosition - npcPosition
+				if separation.length_squared() < 0.0001:
+					separation = Vector3(rand_range(-1, 1), 0, rand_range(-1, 1))
+				separation = separation.normalized()
+				result += separation * 3.0
 
 	separationResult = result
 	return result
@@ -1681,6 +2097,23 @@ var nav_path: Array = []
 var nav_index: int = 0
 var wander_target: Vector3 = Vector3.ZERO
 
+#func checkLeashDistance() -> void:
+#	if hyper_aggressive:
+#		return
+#	if target == null:
+#		return
+#	var anchor: Vector3
+#	if creator != null and is_instance_valid(creator):
+#		anchor = creator.global_transform.origin
+#	elif spawn_point and is_instance_valid(spawn_point):
+#		anchor = spawn_point.global_transform.origin
+#	else:
+#		return
+#	if !is_instance_valid(target):
+#		return
+#	var targetPos: Vector3 = target.global_transform.origin
+#	if anchor.distance_to(targetPos) > max_wander_distance:
+#		removeAggroTarget(target)
 func checkLeashDistance() -> void:
 	if hyper_aggressive:
 		return
@@ -1696,7 +2129,8 @@ func checkLeashDistance() -> void:
 	if !is_instance_valid(target):
 		return
 	var targetPos: Vector3 = target.global_transform.origin
-	if anchor.distance_to(targetPos) > max_wander_distance:
+	var max_wander_sq := max_wander_distance * max_wander_distance
+	if anchor.distance_squared_to(targetPos) > max_wander_sq:
 		removeAggroTarget(target)
 
 
@@ -2124,6 +2558,41 @@ func decayAggroWhileRunning() -> void:
 			aggro_changed = true
 
 var dead_target_aggro: Dictionary = {}
+func cleanupAggroAndDeadTargetsMerged() -> void:
+	if targets.empty():
+		return
+	var remainingTargets: Array = []
+	var targetRemoved := false
+	var dt := get_physics_process_delta_time()
+
+	for aggroTarget in targets:
+		if !is_instance_valid(aggroTarget.target_entity):
+			continue
+
+		if isTargetDownedOrDead(aggroTarget.target_entity):
+			dead_target_aggro[aggroTarget.target_entity] = aggroTarget.aggro
+			if aggroTarget.target_entity == target:
+				targetRemoved = true
+			animation_tree.active = true
+			setAnimParam("parameters/Interraction/blend_amount", 0)
+			continue
+
+		var distance: float = global_transform.origin.distance_to(aggroTarget.target_entity.global_transform.origin)
+		var inRealCombat: bool = hasRealCombatWith(aggroTarget.target_entity)
+		var dropDistance: float = aggro_drop_distance if inRealCombat else passive_aggro_drop_distance
+		var decayRate: float = aggro_decay_per_second if inRealCombat else passive_aggro_decay_per_second
+		if distance > dropDistance:
+			aggroTarget.aggro -= decayRate * dt
+		if aggroTarget.aggro > 0:
+			remainingTargets.append(aggroTarget)
+
+	targets = remainingTargets
+
+	var highest = findHighestAggro()
+	target = highest.target_entity if highest and highest.aggro > 0 else null
+	if targetRemoved:
+		interruptAttack()
+
 
 func cleanupDeadAggro() -> void:
 	if targets.empty():
@@ -2309,20 +2778,24 @@ export var combat_distance_refresh_interval: int = 15
 var warnedNoOfflinePlayer := false
 
 func updateCachedNearestPlayerDistFast() -> void:
-	var nearest: float = INF
+	var origin := global_transform.origin
+	var nearest_sq: float = INF
 	for player in getActivePlayers():
 		if !is_instance_valid(player):
 			continue
-		var d: float = global_transform.origin.distance_to(player.global_transform.origin)
-		if d < nearest:
-			nearest = d
-	cachedNearestPlayerDist = nearest
+		var d: float = origin.distance_squared_to(player.global_transform.origin)
+		if d < nearest_sq:
+			nearest_sq = d
+	cachedNearestPlayerDist = INF if nearest_sq == INF else sqrt(nearest_sq)
+
 
 
 # =============================================================================
 # SECTION 22 — IFRAME / COLLISION TOGGLE FOR BURROW-STYLE SKILLS
 # =============================================================================
 var collisionsAreEnabled := true
+var _iframe_collisions_disabled:bool = false
+
 
 func cleanIframes() -> void:
 	var shouldBeEnabled: bool = (current_skill != "burrow")

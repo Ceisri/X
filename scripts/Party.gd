@@ -131,6 +131,10 @@ func _ready():
 	close_inspect_button.connect("pressed", self, "closeInspect")
 	updateMembersDisplay()
 
+
+	if get_tree().network_peer != null:
+		call_deferred("_tryRequestPartyRestore")
+
 func _physics_process(delta)->void:
 	_refresh_timer += delta
 	if _refresh_timer >= refresh_rate:
@@ -211,6 +215,12 @@ func canInviteToParty(target:Node) -> bool:
 
 	if !party_members.empty() and !isLocalPlayerLeader():
 		return false
+
+	if recently_refused_by.has(target.entity_name):
+		var elapsed_ms = OS.get_ticks_msec() - recently_refused_by[target.entity_name]
+		if elapsed_ms < PARTY_REFUSE_COOLDOWN_MS:
+			return false
+		recently_refused_by.erase(target.entity_name)
 
 	var target_party = target.get_node_or_null("UI/Party")
 	if is_instance_valid(target_party):
@@ -546,22 +556,65 @@ func doPromote(entity_name:String) -> void:
 	notifyPartySystemMessage(entity_name + " was promoted to party leader")
 
 
-# Party.gd — new. Pushes this player's current roster to the server so
-# Global.party_rosters never goes stale. If we ARE the server
-# (hosting your own player), write directly -- no RPC needed.
 func reportPartyToServer() -> void:
 	if get_tree().network_peer == null:
-		Global.party_rosters[player.entity_name] = party_members.duplicate(true)
+		Global.updatePartyRosterAndMirrorBots(player.entity_name, party_members.duplicate(true))
+		Global.party_leaders[player.entity_name] = party_leader_name
 		return
 	if get_tree().is_network_server():
-		Global.party_rosters[player.entity_name] = party_members.duplicate(true)
+		Global.updatePartyRosterAndMirrorBots(player.entity_name, party_members.duplicate(true))
+		Global.party_leaders[player.entity_name] = party_leader_name
 		return
-	rpc_id(1, "requestUpdatePartyRoster", player.entity_name, party_members.duplicate(true))
-	
-remote func requestUpdatePartyRoster(entity_name:String, roster:Array) -> void:
+	rpc_id(1, "requestUpdatePartyRoster", player.entity_name, party_members.duplicate(true), party_leader_name)
+
+remote func requestUpdatePartyRoster(entity_name:String, roster:Array, leader_name:String = "") -> void:
 	if !get_tree().is_network_server():
 		return
-	Global.party_rosters[entity_name] = roster.duplicate(true)
+	Global.updatePartyRosterAndMirrorBots(entity_name, roster)
+	if leader_name != "":
+		Global.party_leaders[entity_name] = leader_name
+
+remote func requestRestorePartyRoster(entity_name:String) -> void:
+	if !get_tree().is_network_server():
+		return
+	var sender_id = get_tree().get_rpc_sender_id()
+	if sender_id == 0:
+		sender_id = 1
+	if !Global.party_rosters.has(entity_name):
+		return
+	var stored_roster:Array = Global.party_rosters[entity_name]
+	if stored_roster.empty():
+		return
+	var leader_name = str(Global.party_leaders.get(entity_name,""))
+	var live_roster := []
+	for m in stored_roster:
+		var mname = str(m.get("entity_name",""))
+		if mname == "":
+			continue
+		var node = Global.getPlayerOrBotNode(mname)
+		var live_peer = -1
+		if is_instance_valid(node) and !node.is_in_group("BOT"):
+			live_peer = node.get_network_master()
+		live_roster.append({"entity_name": mname, "peer_id": live_peer})
+	rpc_id(sender_id, "receiveRestoredPartyRoster", live_roster, leader_name)
+
+remote func receiveRestoredPartyRoster(roster:Array, leader_name:String) -> void:
+	if !player.has_method("isLocalPlayer") or !player.isLocalPlayer():
+		return
+	if roster.empty() and leader_name == "":
+		return
+	party_members = roster.duplicate(true)
+	party_leader_name = leader_name
+	updateMembersDisplay()
+
+
+func _tryRequestPartyRestore() -> void:
+	if get_tree().network_peer == null:
+		return
+	yield(get_tree().create_timer(1.0), "timeout")
+	if !is_instance_valid(self) or get_tree().network_peer == null:
+		return
+	rpc_id(1, "requestRestorePartyRoster", player.entity_name)
 
 
 func myInfo() -> Dictionary:
@@ -727,24 +780,36 @@ func refreshAllRows() -> void:
 		if is_instance_valid(row):
 			updateRow(row, entity_name)
 
-
-
-
-
 func updateRow(row:Control, entity_name:String) -> void:
 	var target = findPlayerByName(entity_name)
-	if !is_instance_valid(target):
-		return
-
-	var stats = target.get_node_or_null("Stats")
-	if !is_instance_valid(stats):
-		return
-
 	var hp_bar = row.get_node_or_null("HP")
 	var ar_bar = row.get_node_or_null("AR")
 	var en_bar = row.get_node_or_null("EN")
 	var name_label = row.get_node_or_null("NameLalbel")
 	var hp_label = row.get_node_or_null("HPLalbel")
+
+	var is_online = is_instance_valid(target)
+
+	if !is_online:
+		if is_instance_valid(hp_bar): hp_bar.modulate = Color(0.5,0.5,0.5,1)
+		if is_instance_valid(ar_bar): ar_bar.modulate = Color(0.5,0.5,0.5,1)
+		if is_instance_valid(en_bar): en_bar.modulate = Color(0.5,0.5,0.5,1)
+		row.modulate = Color(0.6,0.6,0.6,1)
+		if is_instance_valid(name_label):
+			var prefix = "Leader:" if entity_name == party_leader_name else ""
+			name_label.text = prefix + entity_name + " (offline)"
+		if is_instance_valid(hp_label):
+			hp_label.text = "offline"
+		return
+
+	if is_instance_valid(hp_bar): hp_bar.modulate = Color(1,1,1,1)
+	if is_instance_valid(ar_bar): ar_bar.modulate = Color(1,1,1,1)
+	if is_instance_valid(en_bar): en_bar.modulate = Color(1,1,1,1)
+	row.modulate = Color(1,1,1,1)
+
+	var stats = target.get_node_or_null("Stats")
+	if !is_instance_valid(stats):
+		return
 
 	if hp_bar:
 		hp_bar.max_value = stats.max_health
@@ -765,8 +830,51 @@ func updateRow(row:Control, entity_name:String) -> void:
 
 
 
-
 func _formatNumber(n:float) -> String:
 	if n >= 1000.0:
 		return ("%.1f" % (n / 1000.0)) + "k"
 	return str(int(round(n)))
+
+
+
+
+
+
+
+
+
+func gatherPartySnapshot() -> Dictionary:
+	return {
+		"party_members": party_members.duplicate(true),
+		"party_leader_name": party_leader_name
+	}
+
+remote func applyOwnPartySnapshot(data:Dictionary) -> void:
+	if !is_instance_valid(player) or !player.has_method("isLocalPlayer") or !player.isLocalPlayer():
+		return
+	if data.empty():
+		return
+	party_members = data.get("party_members", []).duplicate(true)
+	party_leader_name = str(data.get("party_leader_name",""))
+	if !party_members.empty() or party_leader_name != "":
+		updateMembersDisplay()
+		reportPartyToServer()
+
+func saveData() -> void:
+	if !is_instance_valid(player) or !player.has_method("isLocalPlayer") or !player.isLocalPlayer():
+		return
+	if "data_fully_loaded" in player and !player.data_fully_loaded:
+		return
+	var world = player.get_parent()
+	if is_instance_valid(world) and world.has_method("savePartyFor"):
+		world.savePartyFor(player, gatherPartySnapshot())
+
+remote func requestSelfSaveParty() -> void:
+	if !is_instance_valid(player) or !player.has_method("isLocalPlayer") or !player.isLocalPlayer():
+		return
+	if "data_fully_loaded" in player and !player.data_fully_loaded:
+		return
+
+
+
+

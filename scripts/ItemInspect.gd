@@ -93,24 +93,30 @@ func _input(event):
 						return
 func getVisibileSkillTrees() -> Array:
 	var trees := []
-
-	if skill_tree_root == null:
+	if skill_tree_root == null or !skill_tree_root.visible:
 		return trees
 
-	for child in skill_tree_root.get_children():
-		if child == null:
-			continue
-		if !child.visible:
-			continue
-		if !child.name.begins_with("SkillsTreeHolder"):
-			continue
+	# Single unified skill tree now (was multiple SkillsTreeHolderN
+	# panels) -- expected path first, name-search fallback so a future
+	# rename doesn't silently break tooltip/hover detection on skill icons.
+	var buttons_container = skill_tree_root.get_node_or_null("SkillTree/Control/MoveThis")
+	if !is_instance_valid(buttons_container):
+		buttons_container = findNodeByNameRecursive(skill_tree_root,"MoveThis")
 
-		var control = child.get_node_or_null("Control")
-		if control != null and control.visible:
-			trees.append(control)
+	if is_instance_valid(buttons_container) and buttons_container.visible:
+		trees.append(buttons_container)
 
 	return trees
-	
+
+
+func findNodeByNameRecursive(node:Node, target_name:String) -> Node:
+	for child in node.get_children():
+		if child.name == target_name:
+			return child
+		var found = findNodeByNameRecursive(child,target_name)
+		if is_instance_valid(found):
+			return found
+	return null
 
 func _get_visible_rect(control:Control)->Rect2:
 	var rect=control.get_global_rect()

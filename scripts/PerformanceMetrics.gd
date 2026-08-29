@@ -485,15 +485,15 @@ func distanceSqToPlayer(mobOrigin:Vector3, playerPos:Vector3) -> float:
 
 
 
-# Memoized-per-frame check removed: this is only ever called once per
-# mob per physics tick (from processMob), so the old combatCache dict
-# lookup/store never actually produced a cache hit — it was pure
-# overhead. Delete the "var combatCache:Dictionary = {}" declaration
-# above along with this.
+
+var _last_processed_visual_frame_master:int = -1
 func isMobInCombatOrDying(mob) -> bool:
+	var visual_frame_m:int = Engine.get_frames_drawn()
+	if visual_frame_m == _last_processed_visual_frame_master:
+		return false
+	_last_processed_visual_frame_master = visual_frame_m
 	if !is_instance_valid(mob):
 		return false
-
 	var data = getMobData(mob)
 	if bool(data["has_target"]) and mob.target != null:
 		return true

@@ -3,9 +3,6 @@ extends ScrollContainer
 onready var player = $"../../.."
 onready var stats = $"../../../Stats"
 onready var skill_tree = $".."
-var dragging := false
-var last_pos := Vector2()
-
 
 var skills = {
 	"combo attack":1,
@@ -14,24 +11,6 @@ var skills = {
 	"overhead_strike":0
 }
 
-
-
-func _gui_input(event):
-
-	if event is InputEventMouseButton and event.button_index == BUTTON_LEFT:
-
-		if event.pressed:
-			dragging = true
-			last_pos = get_global_mouse_position()
-		else:
-			dragging = false
-
-	elif event is InputEventMouseMotion and dragging:
-
-		var current = get_global_mouse_position()
-		var delta = current - last_pos
-
-		scroll_horizontal -= delta.x
-		scroll_vertical -= delta.y
-
-		last_pos = current
+# Dragging/panning moved to MoveThis.gd (the child that actually holds
+# the skill buttons now). Keeping _gui_input here too would double-pan
+# or fight it silently, so it's removed.

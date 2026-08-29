@@ -55,11 +55,11 @@ func _ready():
 	loadKeybinds()
 	connectButtons()
 	resetSkillRuntime()
-#	call_deferred("initializeSkillsToPreventAstupidFuckingBugIDontKnowHowToFix")
-#
+	call_deferred("initializeSkillsToPreventAstupidFuckingBugIDontKnowHowToFix")
+
 	
-var _warming_up_skills := false
-const SKILL_INIT_PASSES = 8
+var _warming_up_skills:bool= false
+const SKILL_INIT_PASSES = 1
 func initializeSkillsToPreventAstupidFuckingBugIDontKnowHowToFix()->void:
 	if player == null or grid == null or grid2 == null:
 		return
@@ -637,9 +637,9 @@ func getSkillData(slot):
 		"slot": slot
 	}
 
+onready var slot_mainhand:TextureRect = $"../Equipment/MainHand/Slot"
 func skills(slot)->void:
-	var inventory_grid:GridContainer = $"../Inventory/ScrollContainer/GridContainer"
-	var slot_mainhand:TextureRect = $"../Equipment/MainHand/Slot"
+
 	if player.is_chatting == true:
 		return 
 	if stats.health <=0:
@@ -729,16 +729,34 @@ func skills(slot)->void:
 	var unlocked = skill_name in ["combo attack","guard","evasion","parry","backstep","penetrating blow"]
 	if !unlocked:
 		var texture = Global.skills[skill_name]
-		var roots = [$"../SkillTreeRoot/BasicSkils"]
-		for holder_index in range(16):
-			roots.append($"../SkillTreeRoot".get_node("SkillsTreeHolder"+str(holder_index+1)+"/Control"))
+		var roots := []
+
+		var skill_tree_root = get_node_or_null("../SkillTreeRoot")
+		if is_instance_valid(skill_tree_root):
+			var basic_skills = skill_tree_root.get_node_or_null("BasicSkils")
+			if is_instance_valid(basic_skills):
+				roots.append(basic_skills)
+
+			# Single unified skill tree now (was 16 per-class holders) --
+			# expected path first, name-search fallback so a future rename
+			# doesn't silently disable every skill unlock check.
+			var buttons_container = skill_tree_root.get_node_or_null("SkillTree/Control/MoveThis")
+			if !is_instance_valid(buttons_container):
+				buttons_container = findNodeByNameRecursive(skill_tree_root,"MoveThis")
+			if is_instance_valid(buttons_container):
+				roots.append(buttons_container)
+
 		for root in roots:
+			if !is_instance_valid(root):
+				continue
 			var stack = [root]
 			while stack.size() > 0 and !unlocked:
 				var node = stack.pop_back()
+				if !is_instance_valid(node):
+					continue
 				for child in node.get_children():
 					stack.append(child)
-					if child is TextureButton and child.has_node("Slot") and child.skill_level > 0 and child.get_node("Slot").texture == texture:
+					if child is TextureButton and child.has_node("Slot") and "skill_level" in child and child.skill_level > 0 and child.get_node("Slot").texture == texture:
 						unlocked = true
 						break
 	if !unlocked:
@@ -750,6 +768,10 @@ func skills(slot)->void:
 
 	if not skill_name in Global.chargeable_skills and energy_cost>0:
 		if stats.energy<energy_cost: return
+
+	var arcane_cost_check:float = Global.getArcaneCost(skill_name)
+	if not skill_name in Global.chargeable_skills and arcane_cost_check>0:
+		if stats.arcane<arcane_cost_check: return
 
 	if is_combo:
 		if player.anim_locks["flinch"] == false or player.anim_locks["knocked back"] == false or player.anim_locks["knocked down"] == false:
@@ -764,7 +786,16 @@ func skills(slot)->void:
 	
 	if skill_name == "aegis" and !_warming_up_skills:
 		inventory.switchDefensiveStanceWeapons()
-	
+
+
+func findNodeByNameRecursive(node:Node, target_name:String) -> Node:
+	for child in node.get_children():
+		if child.name == target_name:
+			return child
+		var found = findNodeByNameRecursive(child,target_name)
+		if is_instance_valid(found):
+			return found
+	return null
 	
 var skill_delay_busy:=false
 func delayedSkill(skill_name,path,energy_cost,slot):
@@ -813,6 +844,11 @@ func applyCooldownAndCost(skill_name,path,energy_cost)->void:
 			stats.energy -= energy_cost
 			character_ui.updateBars()
 
+		var arcane_cost:float = Global.getArcaneCost(skill_name)
+		if arcane_cost > 0:
+			stats.arcane -= arcane_cost
+			character_ui.updateBars()
+
 
 func reimburseSkill(skill_name:String)->void:
 	if !Global.skills.has(skill_name):
@@ -840,6 +876,12 @@ func castSkill(skill_name:String)->void:
 
 	var path=Global.skills[skill_name].resource_path
 	var energy_cost=Global.getEnergyCost(skill_name)
+	var arcane_cost=Global.getArcaneCost(skill_name)
+
+	if energy_cost>0 and stats.energy<energy_cost:
+		return
+	if arcane_cost>0 and stats.arcane<arcane_cost:
+		return
 
 	player.animation_tree.active=true
 	player.current_skill=skill_name
@@ -857,6 +899,9 @@ func castSkill(skill_name:String)->void:
 		stats.energy-=energy_cost
 		character_ui.updateBars()
 
+	if arcane_cost>0:
+		stats.arcane-=arcane_cost
+		character_ui.updateBars()
 
 
 
@@ -1449,39 +1494,3 @@ func fixSlotMouseFilters() -> void:
 			if slot:
 				slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-##safety nets____________________________________________________________________
-#func can_drop_data(position, data) -> bool:
-#	return typeof(data) == TYPE_DICTIONARY and data.has("origin_texture")
-#
-#func drop_data(position, data) -> void:
-#	var target_slot = getSlotUnderMouse()
-#	if target_slot == null:
-#		return
-#
-#	var origin_node = data.get("origin_node")
-#	var origin_icon = data.get("origin_icon")
-#	var from_skill_tree = data.get("origin_is_from_skill_tree", false)
-#
-#	if origin_node == getButtonForSlot(target_slot):
-#		return
-#
-#	var displaced_texture = target_slot.texture
-#	target_slot.texture = data["origin_texture"]
-#
-#	if origin_icon and !from_skill_tree:
-#		origin_icon.texture = displaced_texture
-#
-#func getSlotUnderMouse():
-#	var mouse_pos = get_global_mouse_position()
-#	for container in [grid, grid2]:
-#		for holder in container.get_children():
-#			var slot = holder.get_node_or_null("Slot")
-#			if slot == null:
-#				continue
-#			var rect = Rect2(slot.rect_global_position, slot.rect_size)
-#			if rect.has_point(mouse_pos):
-#				return slot
-#	return null
-#
-#func getButtonForSlot(slot):
-#	return slot.get_parent().get_node_or_null("TextureButton")

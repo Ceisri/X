@@ -146,7 +146,8 @@ func _physics_process(delta):
 			player_name_label.text = player.entity_name + ": "+ $"../../Stats".sex
 			updateEquipment()
 		_syncEquipmentToPuppets(delta)
-
+		if Input.is_action_just_pressed("equipment"):
+			visible = !visible 
 		if Input.is_action_just_pressed("up"):
 			move_bone("HipHolder.l", 0, 0, -5)
 			move_bone("inverted.l", 0, 0, -5)

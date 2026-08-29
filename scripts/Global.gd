@@ -186,18 +186,22 @@ func unregisterBotName(bot_name:String) -> void:
 var _searchBudgetPerFrame:int = 6
 var _searchBudgetUsedThisFrame:int = 0
 var _searchBudgetFrame:int = -999999
+var _searchBudgetBotCountCache:int = 0
+var _searchBudgetBotCountFrame:int = -999999
+var search_budget_per_bot_ratio:float = 0.25   # ~1 slot per 4 bots extra
+var search_budget_max:int = 30
 
-# Global cap on expensive spatial-grid searches (findMobTarget,
-# findDownedAlly, etc) executed in a single physics frame, regardless of
-# how many bots/mobs want to run one this tick. Each bot already retries
-# on its own short cooldown if it doesn't get a slot, so nothing is ever
-# silently skipped -- it just runs a frame or few later instead of all
-# bots bursting queryRadius() on the same tick.
 func canRunExpensiveSearchThisFrame() -> bool:
 	var frame:int = Engine.get_physics_frames()
 	if frame != _searchBudgetFrame:
 		_searchBudgetFrame = frame
 		_searchBudgetUsedThisFrame = 0
+		# Recompute budget at most once per frame, cheap (group size lookup).
+		if frame - _searchBudgetBotCountFrame >= 30:
+			_searchBudgetBotCountFrame = frame
+			_searchBudgetBotCountCache = get_tree().get_nodes_in_group("BOT").size()
+		var scaled:int = 6 + int(float(_searchBudgetBotCountCache) * search_budget_per_bot_ratio)
+		_searchBudgetPerFrame = clamp(scaled, 6, search_budget_max)
 	if _searchBudgetUsedThisFrame >= _searchBudgetPerFrame:
 		return false
 	_searchBudgetUsedThisFrame += 1
@@ -851,65 +855,103 @@ func getMobCharacterNode(mob: Node) -> Spatial:
  
  
 var _next_id: int = 0
- 
- 
-func spawnProjectile(scene_path: String, shooter: Node, spawn_transform = null) -> Node:
+var _projectile_pools := {} # scene_path -> Array of Node
+var _projectile_pool_holder: Node = null
+
+func _getProjectilePoolHolder() -> Node:
+	if _projectile_pool_holder == null or !is_instance_valid(_projectile_pool_holder):
+		_projectile_pool_holder = Node.new()
+		_projectile_pool_holder.name = "ProjectilePoolHolder"
+		get_tree().root.add_child(_projectile_pool_holder)
+	return _projectile_pool_holder
+
+func _acquireProjectile(scene_path: String) -> Node:
+	var pool: Array = _projectile_pools.get(scene_path, [])
+	while !pool.empty():
+		var node = pool.pop_back()
+		if is_instance_valid(node):
+			_projectile_pools[scene_path] = pool
+			return node
+	_projectile_pools[scene_path] = pool
+	var scene: PackedScene = load(scene_path)
+	if scene == null:
+		return null
+	var node = scene.instance()
+	if node.has_method("setPoolInfo"):
+		node.setPoolInfo(scene_path)
+	return node
+
+func releaseProjectile(node: Node, scene_path: String) -> void:
+	if !is_instance_valid(node):
+		return
+	var current_parent = node.get_parent()
+	if current_parent != null:
+		current_parent.remove_child(node)
+	var holder = _getProjectilePoolHolder()
+	holder.add_child(node)
+	var pool: Array = _projectile_pools.get(scene_path, [])
+	pool.append(node)
+	_projectile_pools[scene_path] = pool
+
+
+func spawnProjectile(scene_path: String, shooter: Node, spawn_transform = null, aim_direction: Vector3 = Vector3.ZERO, use_aim_direction: bool = false) -> Node:
 	if get_tree().network_peer != null and !get_tree().is_network_server():
 		return null
 	if !is_instance_valid(shooter):
 		return null
- 
+
 	var world: Node = _findWorldFor(shooter)
 	if world == null:
 		return null
- 
+
 	var use_transform: Transform = spawn_transform if spawn_transform != null else shooter.global_transform
- 
+
 	_next_id += 1
 	var node_name: String = "Projectile_" + str(_next_id)
- 
+
 	if get_tree().network_peer != null:
 		var shooter_path: NodePath = world.get_path_to(shooter)
-		rpc("spawnProjectileRemote", scene_path, world.world_id, node_name, shooter_path, use_transform)
- 
-	return _instanceLocal(scene_path, world, node_name, shooter, use_transform)
- 
- 
-remote func spawnProjectileRemote(scene_path: String, world_id: String, node_name: String, shooter_path: NodePath, spawn_transform: Transform) -> void:
+		rpc("spawnProjectileRemote", scene_path, world.world_id, node_name, shooter_path, use_transform, aim_direction, use_aim_direction)
+
+	return _instanceLocal(scene_path, world, node_name, shooter, use_transform, aim_direction, use_aim_direction)
+
+
+remote func spawnProjectileRemote(scene_path: String, world_id: String, node_name: String, shooter_path: NodePath, spawn_transform: Transform, aim_direction: Vector3 = Vector3.ZERO, use_aim_direction: bool = false) -> void:
 	if get_tree().get_rpc_sender_id() != 1:
 		return
 	if get_tree().is_network_server():
 		return
- 
+
 	var world: Node = _getWorldById(world_id)
 	if world == null:
 		return
 	if world.has_node(node_name):
 		return
- 
+
 	var shooter: Node = world.get_node_or_null(shooter_path)
-	_instanceLocal(scene_path, world, node_name, shooter, spawn_transform)
- 
- 
-func _instanceLocal(scene_path: String, world: Node, node_name: String, shooter: Node, spawn_transform: Transform) -> Node:
-	var scene: PackedScene = load(scene_path)
-	if scene == null:
+	_instanceLocal(scene_path, world, node_name, shooter, spawn_transform, aim_direction, use_aim_direction)
+
+
+func _instanceLocal(scene_path: String, world: Node, node_name: String, shooter: Node, spawn_transform: Transform, aim_direction: Vector3 = Vector3.ZERO, use_aim_direction: bool = false) -> Node:
+	var node: Node = _acquireProjectile(scene_path)
+	if node == null:
 		return null
- 
-	var node: Node = scene.instance()
+
 	node.name = node_name
- 
-	if "shooter" in node:
-		node.shooter = shooter
-	node.transform = spawn_transform
- 
 	world.add_child(node)
- 
+
 	if get_tree().network_peer != null:
 		node.set_network_master(1, true)
- 
+
+	if node.has_method("activate"):
+		node.activate(shooter, spawn_transform, aim_direction, use_aim_direction)
+	else:
+		if "shooter" in node:
+			node.shooter = shooter
+		node.transform = spawn_transform
+
 	return node
- 
+
  
 func _findWorldFor(node: Node) -> Node:
 	var n: Node = node
@@ -2388,8 +2430,10 @@ func _applyFullSnapshotToPlayer(player:Node, snapshot:Dictionary, has_spawn_pos:
 	player.data_fully_loaded = true
 	if player.has_method("_revealAfterLoad"):
 		player._revealAfterLoad()
- 
- 
+
+	var party_node = player.get_node("UI/Party")
+	if is_instance_valid(party_node) and !snapshot.get("party", {}).empty():
+		party_node.applyOwnPartySnapshot(snapshot["party"])
 func _sendAllSnapshotsStaggered(world:Node, peer_id:int, entity_name:String, world_id:String, has_spawn_pos:bool) -> void:
 	if !_stillValidForSnapshot(world, peer_id):
 		return
@@ -2435,7 +2479,33 @@ func _sendAllSnapshotsStaggered(world:Node, peer_id:int, entity_name:String, wor
 	if !_stillValidForSnapshot(world, peer_id):
 		return
 	_markPlayerFullyLoaded(world, peer_id)
- 
+	yield(get_tree(), "idle_frame")
+	if !_stillValidForSnapshot(world, peer_id):
+		return
+	_sendPartySnapshot(world, peer_id, entity_name)
+	
+	
+	
+func _sendPartySnapshot(world:Node, peer_id:int, entity_name:String) -> void:
+	if !is_instance_valid(world) or !world.has_method("getPartySaveDir"):
+		return
+	var data = world.readPartySave(world.getPartySaveDir(entity_name) + "party.save")
+	if data.empty():
+		return
+	var player = world.get_node_or_null(str(peer_id))
+	if !is_instance_valid(player):
+		return
+	var party_node = player.get_node_or_null("UI/Party")
+	if !is_instance_valid(party_node):
+		return
+	if peer_id == get_tree().get_network_unique_id():
+		party_node.applyOwnPartySnapshot(data)
+	else:
+		party_node.rpc_id(peer_id, "applyOwnPartySnapshot", data)
+	
+	
+	
+	
 func _markPlayerFullyLoaded(world:Node, peer_id:int) -> void:
 	var player = world.get_node(str(peer_id))
 	if !is_instance_valid(player):
@@ -3988,7 +4058,7 @@ var pending_equipment_snapshot := {}
  
 func _ready() -> void:
 	# ---- physics/quit setup ----
-	ProjectSettings.set_setting("physics/common/max_physics_steps_per_frame", 3)# ignore this 
+	ProjectSettings.set_setting("physics/common/max_physics_steps_per_frame", 1)
 	var root = get_tree().root
 	current_scene = root.get_child(root.get_child_count() - 1)
 	get_tree().set_auto_accept_quit(false)
@@ -4049,8 +4119,8 @@ func _physics_process(delta: float) -> void:
  
  
 var _mob_seen_frame := {}   # mob instance id -> physics frame last reported visible by any player camera
-export var mob_visibility_grace_frames := 45
-export var mob_visibility_sweep_interval := 15
+var mob_visibility_grace_frames := 45
+var mob_visibility_sweep_interval := 15
  
 remote func reportMobVisible(mob_path:NodePath) -> void:
 	if !get_tree().is_network_server():
@@ -4083,8 +4153,8 @@ func _markMobSeenByPlayer(mob) -> void:
  
  
  
-export var force_wake_range := 25.0
-export var force_freeze_grace_frames := 12
+var force_wake_range := 25.0
+var force_freeze_grace_frames := 12
 var _mob_last_seen_frame := {} # instance_id -> physics frame last seen in a player's frustum
  
 func forceWakeVisibleNearbyMobs() -> void:
@@ -4327,6 +4397,7 @@ func isPlayerReady() -> bool:
  
  
 # ============================ ITEMS SECTION ============================
+
 func generateLootForCorpse(corpse):
 	var loot = []
 	var weight = 100.0
@@ -4336,14 +4407,115 @@ func generateLootForCorpse(corpse):
 		weight = corpse.stats.weight
 		species = corpse.stats.species
 
+	var species_lower = species.to_lower().strip_edges()
+
+	# Plantera Resources
+	if species_lower.find("plantera") != -1 or species_lower.find("azultera") != -1 or species_lower.find("rosatera") != -1 or species_lower.find("embertera") != -1 or species_lower.find("virelia") != -1:
+		loot.append({
+			"item_key": "plantera trunk",
+			"quantity": 1,
+			"category": "resources"
+		})
+
+		loot.append({
+			"item_key": "plantera leaf",
+			"quantity": 2,
+			"category": "resources"
+		})
+
+		if randf() <= 0.33:
+			loot.append({
+				"item_key": "plantera mouth",
+				"quantity": 1,
+				"category": "resources"
+			})
+
+		if randf() <= 0.15:
+			var oil_amount = randi() % 11 + 1
+			loot.append({
+				"item_key": "plantera oil",
+				"quantity": oil_amount,
+				"category": "resources"
+			})
+
+		if randf() <= 0.45:
+			var teeth_amount = randi() % 6 + 1
+			loot.append({
+				"item_key": "plantera teeth",
+				"quantity": teeth_amount,
+				"category": "resources"
+			})
+
+		if randf() <= 0.30:
+			var spores_amount = randi() % 4 + 1
+			loot.append({
+				"item_key": "plantera spores",
+				"quantity": spores_amount,
+				"category": "resources"
+			})
+
+		if randf() <= 0.20:
+			loot.append({
+				"item_key": "plantera fruit",
+				"quantity": 1,
+				"category": "resources"
+			})
+
+		if randf() <= 0.25:
+			loot.append({
+				"item_key": "plantera papillae",
+				"quantity": 1,
+				"category": "resources"
+			})
+
+		return loot
+
+	# Spider Resources
+	if species_lower.find("spider") != -1:
+		var leg_amount = randi() % 8 + 1
+		loot.append({
+			"item_key": "spider leg",
+			"quantity": leg_amount,
+			"category": "resources"
+		})
+
+		if randf() <= 0.50:
+			loot.append({
+				"item_key": "spider eggsack",
+				"quantity": 1,
+				"category": "resources"
+			})
+
+		if randf() <= 0.10:
+			loot.append({
+				"item_key": "spider stinger",
+				"quantity": 1,
+				"category": "resources"
+			})
+
+		if randf() <= 0.25:
+			loot.append({
+				"item_key": "spider poisonsack",
+				"quantity": 1,
+				"category": "resources"
+			})
+
+		if randf() <= 0.70:
+			var silk_amount = randi() % 7 + 3
+			loot.append({
+				"item_key": "silk",
+				"quantity": silk_amount,
+				"category": "resources"
+			})
+
+		return loot
+
+	# Normal Animal Loot
 	var bone_amount = 250
-	# FIX: round(weight*0.6) could hit 0 for very light mobs, making that
-	# entry silently worthless and, combined with any other failure, leave
-	# the corpse looking empty. Guaranteed minimum of 1.
 	var meat_amount = max(1, int(round(weight * 0.6)))
 	var meat_key = ""
 
-	match species.to_lower():
+	match species_lower:
 		"wolf":
 			meat_key = "wolf meat"
 		"goat":
@@ -4355,10 +4527,21 @@ func generateLootForCorpse(corpse):
 		_:
 			meat_key = "wolf meat"
 
-	loot.append({"item_key": meat_key, "quantity": meat_amount, "category": "food"})
-	loot.append({"item_key": "bone", "quantity": bone_amount, "category": "food"})
+	loot.append({
+		"item_key": meat_key,
+		"quantity": meat_amount,
+		"category": "food"
+	})
+
+	loot.append({
+		"item_key": "bone",
+		"quantity": bone_amount,
+		"category": "food"
+	})
+
 	return loot
- 
+
+
  
 var flasks = {
 	"empty": {"price": 1, "stackable":true, "icon": "res://world/interface/assets/icons/ProfessionAndCraftIcons/Alchemy/Alchemy_19_little_flask.png", "rarity": 0.0, "description": "placeholder1"},
@@ -4368,33 +4551,258 @@ var flasks = {
 	"power potion": {"price": 35, "stackable":true, "icon": "res://world/interface/assets/icons/ProfessionAndCraftIcons/Alchemy/Alchemy_23_black_poison.png", "rarity": 0.0, "description": "placeholder1"}
 }
  
+
+
 var resources = {
-	"crafting book": {"price": 17, "icon": "res://world/interface/assets/icons/books/book_crafting.png", "rarity": 3.0, "description": "contains all the crafting recipes"},
-	"stone": {"price": 1, "stackable":true, "icon": "res://world/interface/assets/icons/resources/mining/stone.png", "rarity": 0.0, "description": "merely a rock"},
-	"wood log": {"price": 2, "stackable":true, "icon": "res://world/interface/assets/icons/resources/chopping/wood_log.png", "rarity": 0.0},
-	"iron ore": {"price": 5, "stackable":true, "icon": "res://world/interface/assets/icons/resources/mining/ironore.png", "rarity": 0.0},
-	"iron powder": {"price": 9, "stackable":true, "icon":"res://world/interface/assets/icons/resources/powders/iron powder.png", "rarity": 0.0},
-	"coal powder": {"price": 9, "stackable":true, "icon":"res://world/interface/assets/icons/resources/powders/coal powder.png", "rarity": 0.0},
-	"steel powder": {"price": 9, "stackable":true, "icon":"res://world/interface/assets/icons/resources/powders/steel powder.png", "rarity": 0.0},
-	"iron bar": {"price": 15, "stackable":true, "icon": "res://world/interface/assets/icons/resources/metals/iron_bar.png", "rarity": 0.0},
-	"gold ore": {"price":550, "stackable":true, "icon": "res://world/interface/assets/icons/resources/mining/goldore.png", "rarity": 0.0},
-	"gold powder": {"price":200, "stackable":true, "icon": "res://world/interface/assets/icons/resources/powders/gold powder.png", "rarity": 0.0},
-	"gold bar": {"price": 800, "stackable":true, "icon":"res://world/interface/assets/icons/resources/metals/gold_bar.png", "rarity": 0.0},
-	"tomato": {"price":1, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/Tomato.png", "rarity": 0.0},
-	"oyster mushrooms": {"price":1, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/Res_131_mushroom.png", "rarity": 0.0},
-	"mooncap": {"price":9, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/mooncap.png", "rarity": 0.0, "gatherable_qauntity":7},
-	"azuregrass": {"price":1, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/Res_131_mushroom.png", "rarity": 0.0, "gatherable_qauntity":5},
-	"duskspike": {"price":90, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/duskspike.png", "rarity": 0.0, "gatherable_qauntity":1},
-	"skydrop": {"price":10, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/skydrop.png", "rarity": 0.0, "gatherable_qauntity":1},
-	"ossifidia": {"price":15, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/ossifidia.png", "rarity": 0.0, "gatherable_qauntity":1},
-	"puffbelly": {"price":3, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/puffbelly.png", "rarity": 0.0, "gatherable_qauntity":1},
-	"embercap": {"price":10, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/embercap.png", "rarity": 0.0, "gatherable_qauntity":1},
-	"briarcap": {"price":3, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/briarcap.png", "rarity": 0.0, "gatherable_qauntity":1},
-	"dandilion": {"price":1, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/Res_57_flowers.png", "rarity": 0.0, "gatherable_qauntity":3},
-	"olives": {"price":1, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/Olives.png", "rarity": 0.0, "gatherable_qauntity":15},
-	"leaves": {"price":1, "stackable":true, "icon": "res://world/interface/assets/icons/resources/gathering/Res_54_leaves.png", "rarity": 0.0},
+	# Books
+	"crafting book": {
+		"price": 17,
+		"icon": "res://world/interface/assets/icons/books/book_crafting.png",
+		"rarity": 3.0,
+		"description": "Contains all the crafting recipes"
+	},
+
+	# Mining
+	"stone": {
+		"price": 1,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/mining/stone.png",
+		"rarity": 0.0,
+		"description": "Merely a rock"
+	},
+	"iron ore": {
+		"price": 5,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/mining/ironore.png",
+		"rarity": 0.0
+	},
+	"gold ore": {
+		"price": 550,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/mining/goldore.png",
+		"rarity": 0.0
+	},
+
+	# Wood & Gathering
+	"wood log": {
+		"price": 2,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/chopping/wood_log.png",
+		"rarity": 0.0
+	},
+	"tomato": {
+		"price": 1,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/Tomato.png",
+		"rarity": 0.0
+	},
+	"oyster mushrooms": {
+		"price": 1,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/Res_131_mushroom.png",
+		"rarity": 0.0
+	},
+	"mooncap": {
+		"price": 9,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/mooncap.png",
+		"rarity": 0.0,
+		"gatherable_qauntity": 7
+	},
+	"azuregrass": {
+		"price": 1,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/Res_131_mushroom.png",
+		"rarity": 0.0,
+		"gatherable_qauntity": 5
+	},
+	"duskspike": {
+		"price": 90,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/duskspike.png",
+		"rarity": 0.0,
+		"gatherable_qauntity": 1
+	},
+	"skydrop": {
+		"price": 10,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/skydrop.png",
+		"rarity": 0.0,
+		"gatherable_qauntity": 1
+	},
+	"ossifidia": {
+		"price": 15,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/ossifidia.png",
+		"rarity": 0.0,
+		"gatherable_qauntity": 1
+	},
+	"puffbelly": {
+		"price": 3,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/puffbelly.png",
+		"rarity": 0.0,
+		"gatherable_qauntity": 1
+	},
+	"embercap": {
+		"price": 10,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/embercap.png",
+		"rarity": 0.0,
+		"gatherable_qauntity": 1
+	},
+	"briarcap": {
+		"price": 3,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/mushrooms/briarcap.png",
+		"rarity": 0.0,
+		"gatherable_qauntity": 1
+	},
+	"dandilion": {
+		"price": 1,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/Res_57_flowers.png",
+		"rarity": 0.0,
+		"gatherable_qauntity": 3
+	},
+	"olives": {
+		"price": 1,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/Olives.png",
+		"rarity": 0.0,
+		"gatherable_qauntity": 15
+	},
+	"leaves": {
+		"price": 1,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/gathering/Res_54_leaves.png",
+		"rarity": 0.0
+	},
+
+	# Powders
+	"iron powder": {
+		"price": 9,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/powders/iron powder.png",
+		"rarity": 0.0
+	},
+	"coal powder": {
+		"price": 9,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/powders/coal powder.png",
+		"rarity": 0.0
+	},
+	"steel powder": {
+		"price": 9,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/powders/steel powder.png",
+		"rarity": 0.0
+	},
+	"gold powder": {
+		"price": 200,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/powders/gold powder.png",
+		"rarity": 0.0
+	},
+
+	# Metals
+	"iron bar": {
+		"price": 15,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/metals/iron_bar.png",
+		"rarity": 0.0
+	},
+	"gold bar": {
+		"price": 800,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/metals/gold_bar.png",
+		"rarity": 0.0
+	},
+
+	# Plantera Resources
+	"plantera mouth": {
+		"price": 30,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/plantera_drops/plantera_mouth.png",
+		"rarity": 1.0
+	},
+	"plantera leaf": {
+		"price": 15,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/plantera_drops/plantera_leaf.png",
+		"rarity": 1.0
+	},
+	"plantera teeth": {
+		"price": 1,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/plantera_drops/plantera_teeth.png",
+		"rarity": 1.0
+	},
+	"plantera spores": {
+		"price": 1,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/plantera_drops/plantera_spores.png",
+		"rarity": 2.0
+	},
+	"plantera fruit": {
+		"price": 50,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/plantera_drops/plantera_fruit.png",
+		"rarity": 2.0
+	},
+	"plantera trunk": {
+		"price": 3,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/resources/plantera/plantera_trunk.png",
+		"rarity": 2.0
+	},
+	"plantera papillae": {
+		"price": 5,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/plantera_drops/plantera_papillae.png",
+		"rarity": 2.0
+	},
+	"plantera oil": {
+		"price": 15,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/plantera_drops/plantera_oil.png",
+		"rarity": 3.0
+	},
+
+	# Spider Resources
+	"silk": {
+		"price": 12,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/spider_drops/silk.png",
+		"rarity": 0.0
+	},
+	"spider eggsack": {
+		"price": 8,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/spider_drops/spider_eggsack.png",
+		"rarity": 1.0
+	},
+	"spider leg": {
+		"price": 100,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/spider_drops/spider_leg.png",
+		"rarity": 1.0
+	},
+	"spider poisonsack": {
+		"price": 25,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/spider_drops/spider_poisonsack.png",
+		"rarity": 2.0
+	},
+	"spider stinger": {
+		"price": 33,
+		"stackable": true,
+		"icon": "res://world/interface/assets/icons/drops/spider_drops/spider_stinger.png",
+		"rarity": 2.0
+	},
 }
- 
+
+
 var food = {
 	"boar meat": {"price": 35, "stackable":true, "icon": "res://world/interface/assets/icons/ProfessionAndCraftIcons/Cooking_fishing/Cooking_34_meat.png", "rarity": 0.0, "description": "placeholder1"},
 	"moose meat": {"price": 80, "stackable":true, "icon": "res://world/interface/assets/icons/ProfessionAndCraftIcons/Cooking_fishing/Cooking_27_meat.png", "rarity": 0.0, "description": "placeholder2"},
@@ -4850,16 +5258,34 @@ var skills = {
 "heart thrust":preload("res://world/interface/assets/icons/Combat_icons/Berserk_skill_icons/heart_thrust.png"),
 "sunder":preload("res://world/interface/assets/icons/Combat_icons/Berserk_skill_icons/sunder.png"),
 "sledge":preload("res://world/interface/assets/icons/Combat_icons/Berserk_skill_icons/sledge.png"),
+
+# magic skills
+"shadow bolt": preload("res://world/interface/assets/icons/Combat_icons/warlock_icons/shadow_bolt.png"),
+"void grasp": preload("res://world/interface/assets/icons/Combat_icons/warlock_icons/void_grasp.png"),
+"cursed flames": preload("res://world/interface/assets/icons/Combat_icons/warlock_icons/cursed_flames.png"),
+"subversion": preload("res://world/interface/assets/icons/Combat_icons/warlock_icons/subversion.png"),
+
+
+
+
+
+
 "toad spit":load("res://world/interface/assets/icons/Combat_icons/Generic_skills/Aura_Filth.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Generic_skills/Aura_Filth.png") else fallback,
 "plantera bite":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/plantera_skills/planterabite.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/bite.png") else fallback,
 "plantera screech":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/plantera_skills/planteraclaw.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/bite.png") else fallback,
 "plantera scratch":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/plantera_skills/planterascratch.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/bite.png") else fallback,
 "plantera clawstrike":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/plantera_skills/planterascreech.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/bite.png") else fallback,
 "plantera tongueshot":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/plantera_skills/planteratongueshot.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/bite.png") else fallback,
+
+
 "bite":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/bite.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/bite.png") else fallback,
 "scratch":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/claw_srtrike3.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/bite.png") else fallback,
 "screech":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/wall_breaker.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/bite.png") else fallback,
 "roll":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/wall_breaker.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/bite.png") else fallback,
+
+
+
+
 "devastation":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/claw_srtrike3.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/bite.png") else fallback,
 "infected bite":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/infected_bite.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/infected_bite.png") else fallback,
 "slam":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/slam.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/slam.png") else fallback,
@@ -4870,6 +5296,9 @@ var skills = {
 "wall breaker":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/wall_breaker.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/generic_mob_skills/wall_breaker.png") else fallback,
 "surge":load("res://world/interface/assets/icons/Combat_icons/Generic_skills/Druideskill_02_compund.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Generic_skills/Druideskill_02_compund.png") else fallback,
 "unbreakable":load("res://world/interface/assets/icons/Combat_icons/Generic_skills/Aura_Exile.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Generic_skills/Aura_Exile.png") else fallback,
+
+
+
 "eat":load("res://world/interface/assets/icons/Combat_icons/Generic_skills/Aura_Exile.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Generic_skills/Aura_Exile.png") else fallback,
 "web shot":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/Spider_skills/web_shot.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/Spider_skills/web_shot.png") else fallback,
 "poison shot":load("res://world/interface/assets/icons/Combat_icons/Mob_skills/Spider_skills/poison_shot.png") if ResourceLoader.exists("res://world/interface/assets/icons/Combat_icons/Mob_skills/Spider_skills/poison_shot.png") else fallback,
@@ -4908,6 +5337,126 @@ var skill_energy_cost={
 "claw strike":0, "slam":12, "infernal breath":18, "cocytus breath":18, "fire breath":24, "ice breath":24, "fire bombardment":30, "frost bombardment":30, "scorched earth":36, "frozen earth":36,
 "devastation":35,
 }
+var skill_arcane_cost = {
+	"shadow bolt": 5,
+	"void grasp": 30,
+	"cursed flames": 0,
+	"subversion":15,
+}
+
+# ============================ SPECIAL DAMAGE SKILLS ============================
+# Each skill maps to one effect. Multiplier scales linearly between
+# min_mult (at 0% of the driving resource) and max_mult (at 100%).
+
+enum SpecialDmgEffect {
+	OWN_HEALTH_PERCENT,          # more damage the more health caster HAS
+	OWN_MISSING_HEALTH_PERCENT,  # more damage the more health caster is MISSING
+	TARGET_HEALTH_PERCENT,       # more damage the more health target HAS
+	TARGET_MISSING_HEALTH_PERCENT,# more damage the more health target is MISSING
+	OWN_ENERGY_PERCENT,          # more damage the more energy caster has
+	OWN_ARCANE_PERCENT,          # more damage the more arcane caster has
+	OWN_MISSING_ENERGY_PERCENT,
+	OWN_MISSING_ARCANE_PERCENT,
+	TARGET_HEALTH_ABSOLUTE,      # +flat damage for every 10 actual target HP
+}
+
+
+var special_damage_skills:Dictionary = {
+	"stone splitter": {"effect": SpecialDmgEffect.OWN_MISSING_HEALTH_PERCENT, "min_mult": 1.0, "max_mult": 1.6},
+	"heart thrust":   {"effect": SpecialDmgEffect.TARGET_MISSING_HEALTH_PERCENT, "min_mult": 1.0, "max_mult": 2.0},
+	"smite":          {"effect": SpecialDmgEffect.TARGET_HEALTH_PERCENT, "min_mult": 1.0, "max_mult": 1.5},
+	"obliteration":   {"effect": SpecialDmgEffect.OWN_MISSING_HEALTH_PERCENT, "min_mult": 1.0, "max_mult": 2.2},
+	"raze":           {"effect": SpecialDmgEffect.OWN_HEALTH_PERCENT, "min_mult": 0.8, "max_mult": 1.4},
+	"sunder":         {"effect": SpecialDmgEffect.TARGET_MISSING_HEALTH_PERCENT, "min_mult": 1.0, "max_mult": 1.7},
+	"veiled thrust":  {"effect": SpecialDmgEffect.OWN_ENERGY_PERCENT, "min_mult": 0.85, "max_mult": 1.3},
+	"fury strike":    {"effect": SpecialDmgEffect.OWN_MISSING_ENERGY_PERCENT, "min_mult": 1.0, "max_mult": 2.5},
+	"lunar slash":    {"effect": SpecialDmgEffect.OWN_ARCANE_PERCENT, "min_mult": 0.9, "max_mult": 1.6},
+	"recoil slash":   {"effect": SpecialDmgEffect.OWN_MISSING_ARCANE_PERCENT, "min_mult": 1.0, "max_mult": 1.5},
+	"sledge":         {"effect": SpecialDmgEffect.TARGET_HEALTH_PERCENT, "min_mult": 1.0, "max_mult": 1.8},
+
+	# Every 10 points of target's actual current HP = +1 flat damage
+	"crushing blow":  {"effect": SpecialDmgEffect.TARGET_HEALTH_ABSOLUTE, "damage_per_10": 1.0},
+}
+
+func getSpecialDamageMultiplier(skillName:String, casterStats, targetStats) -> float:
+	if !special_damage_skills.has(skillName):
+		return 1.0
+
+	var cfg:Dictionary = special_damage_skills[skillName]
+	var effect:int = int(cfg.get("effect", -1))
+
+	# Absolute HP effects do not use a multiplier.
+	if effect == SpecialDmgEffect.TARGET_HEALTH_ABSOLUTE:
+		return 1.0
+
+	var minMult:float = float(cfg.get("min_mult", 1.0))
+	var maxMult:float = float(cfg.get("max_mult", 1.0))
+	var t:float = 0.0
+
+	match effect:
+		SpecialDmgEffect.OWN_HEALTH_PERCENT:
+			if is_instance_valid(casterStats) and casterStats.max_health > 0:
+				t = clamp(casterStats.health / casterStats.max_health, 0.0, 1.0)
+
+		SpecialDmgEffect.OWN_MISSING_HEALTH_PERCENT:
+			if is_instance_valid(casterStats) and casterStats.max_health > 0:
+				t = clamp(1.0 - (casterStats.health / casterStats.max_health), 0.0, 1.0)
+
+		SpecialDmgEffect.TARGET_HEALTH_PERCENT:
+			if is_instance_valid(targetStats) and targetStats.max_health > 0:
+				t = clamp(targetStats.health / targetStats.max_health, 0.0, 1.0)
+
+		SpecialDmgEffect.TARGET_MISSING_HEALTH_PERCENT:
+			if is_instance_valid(targetStats) and targetStats.max_health > 0:
+				t = clamp(1.0 - (targetStats.health / targetStats.max_health), 0.0, 1.0)
+
+		SpecialDmgEffect.OWN_ENERGY_PERCENT:
+			if is_instance_valid(casterStats) and casterStats.max_energy > 0:
+				t = clamp(casterStats.energy / casterStats.max_energy, 0.0, 1.0)
+
+		SpecialDmgEffect.OWN_MISSING_ENERGY_PERCENT:
+			if is_instance_valid(casterStats) and casterStats.max_energy > 0:
+				t = clamp(1.0 - (casterStats.energy / casterStats.max_energy), 0.0, 1.0)
+
+		SpecialDmgEffect.OWN_ARCANE_PERCENT:
+			if is_instance_valid(casterStats) and casterStats.max_arcane > 0:
+				t = clamp(casterStats.arcane / casterStats.max_arcane, 0.0, 1.0)
+
+		SpecialDmgEffect.OWN_MISSING_ARCANE_PERCENT:
+			if is_instance_valid(casterStats) and casterStats.max_arcane > 0:
+				t = clamp(1.0 - (casterStats.arcane / casterStats.max_arcane), 0.0, 1.0)
+
+		_:
+			return 1.0
+
+	return lerp(minMult, maxMult, t)
+
+
+func getSpecialFlatDamage(skillName:String, targetStats) -> float:
+	if !special_damage_skills.has(skillName):
+		return 0.0
+
+	var cfg:Dictionary = special_damage_skills[skillName]
+	var effect:int = int(cfg.get("effect", -1))
+
+	if effect != SpecialDmgEffect.TARGET_HEALTH_ABSOLUTE:
+		return 0.0
+
+	if !is_instance_valid(targetStats):
+		return 0.0
+
+	var damage_per_10:float = float(cfg.get("damage_per_10", 1.0))
+
+	# Every 10 actual HP = damage_per_10 flat damage.
+	return floor(targetStats.health / 10.0) * damage_per_10
+
+
+
+
+
+
+
+
 var support_skills=["lifeline","unbreakable", "surge","burrow"]
 var skills_by_species = {
 "human":["combo attack", "shoulder bash", "laceration", "bite", "lifeline", "pounce", "sunder"],
@@ -4932,24 +5481,76 @@ var skill_ranges = {
 	"toad spit": true, "web shot": true, "poison shot": true, "fire breath": true, "ice breath": true,
 	"infernal breath": true, "cocytus breath": true, "fire bombardment": true, "frost bombardment": true,
 	"scorched earth": true, "frozen earth": true,
+	"subversion":true,
+	"voide grasp":true,
+	"shadow bolt":true,
+
 }
  
 func isRanged(skill_name:String) -> bool:
 	return skill_ranges.get(skill_name, false)
  
 var skill_damages = {
-"combo attack":{Type.slash:10}, "penetrating blow":{Type.pierce:15},
-"veiled thrust":{Type.pierce:45}, "shield pummel":{Type.blunt:25}, "shield bash":{Type.blunt:20}, "mighty push":{Type.blunt:33}, "smite":{Type.slash:25,Type.blunt:25}, "counterstrike":{Type.slash:15,Type.blunt:10},
-"cross draw":{Type.slash:15}, "recoil slash":{Type.slash:15}, "lunar slash":{Type.slash:45},
-"raze":{Type.slash:40}, "stone splitter":{Type.slash:25,Type.blunt:10}, "brutal chop":{Type.slash:10,Type.blunt:10}, "shoulder bash":{Type.blunt:18}, "heart thrust":{Type.pierce:125}, "fury strike":{Type.slash:40}, "sadistic blow":{Type.slash:25}, "sunder":{Type.slash:15,Type.blunt:15}, "sledge":{Type.slash:15,Type.blunt:15}, "obliteration":{Type.slash:35},
-"plantera bite":{Type.pierce:6}, "plantera screech":{Type.sonic:5}, "plantera scratch":{Type.slash:5}, "plantera clawstrike":{Type.slash:15}, "plantera tongueshot":{Type.blunt:7},
-"roll":{Type.blunt:3},
-"bite":{Type.pierce:15}, "infected bite":{Type.pierce:15,Type.toxic:17}, "wall breaker":{Type.blunt:35},
-"devastation":{Type.slash:8},
-"poisonous hairs":{Type.toxic:7}, "poison shot":{Type.toxic:15}, "web shot":{Type.blunt:10}, "venomous fangs":{Type.pierce:5,Type.blunt:3,Type.toxic:20},
-"claw strike":{Type.slash:17}, "slam":{Type.blunt:28}, "infernal breath":{Type.heat:8}, "fire breath":{Type.heat:8}, "cocytus breath":{Type.cold:5}, "ice breath":{Type.cold:5}, "fire bombardment":{Type.heat:24,Type.blunt:10}, "frost bombardment":{Type.cold:24}, "scorched earth":{Type.heat:12}, "frozen earth":{Type.cold:12},
-"laceration":{Type.pierce:14,Type.bleed:10}, "pounce":{Type.blunt:12,Type.pierce:6},
-"toad spit":{Type.blunt:12},
+	"combo attack": {Type.slash: 10},
+	"penetrating blow": {Type.pierce: 15},
+	"veiled thrust": {Type.pierce: 45},
+	"shield pummel": {Type.blunt: 25},
+	"shield bash": {Type.blunt: 20},
+	"mighty push": {Type.blunt: 33},
+	"smite": {Type.slash: 25, Type.blunt: 25},
+	"counterstrike": {Type.slash: 15, Type.blunt: 10},
+	"cross draw": {Type.slash: 15},
+	"recoil slash": {Type.slash: 15},
+	"lunar slash": {Type.slash: 45},
+	"raze": {Type.slash: 40},
+	"stone splitter": {Type.slash: 25, Type.blunt: 10},
+	"brutal chop": {Type.slash: 10, Type.blunt: 10},
+	"shoulder bash": {Type.blunt: 18},
+	"heart thrust": {Type.pierce: 125},
+	"fury strike": {Type.slash: 40},
+	"sadistic blow": {Type.slash: 25},
+	"sunder": {Type.slash: 15, Type.blunt: 15},
+	"sledge": {Type.slash: 15, Type.blunt: 15},
+	"obliteration": {Type.slash: 35},
+
+	"plantera bite": {Type.pierce: 6},
+	"plantera screech": {Type.sonic: 5},
+	"plantera scratch": {Type.slash: 5},
+	"plantera clawstrike": {Type.slash: 15},
+	"plantera tongueshot": {Type.blunt: 7},
+
+	"roll": {Type.blunt: 3},
+
+	"bite": {Type.pierce: 15},
+	"infected bite": {Type.pierce: 15, Type.toxic: 17},
+	"wall breaker": {Type.blunt: 35},
+
+	"devastation": {Type.slash: 8},
+
+	"poisonous hairs": {Type.toxic: 7},
+	"poison shot": {Type.toxic: 15},
+	"web shot": {Type.blunt: 10},
+	"venomous fangs": {Type.pierce: 5, Type.blunt: 3, Type.toxic: 20},
+
+	"claw strike": {Type.slash: 17},
+	"slam": {Type.blunt: 28},
+	"infernal breath": {Type.heat: 8},
+	"fire breath": {Type.heat: 8},
+	"cocytus breath": {Type.cold: 5},
+	"ice breath": {Type.cold: 5},
+	"fire bombardment": {Type.heat: 24, Type.blunt: 10},
+	"frost bombardment": {Type.cold: 24},
+	"scorched earth": {Type.heat: 12},
+	"frozen earth": {Type.cold: 12},
+
+	"laceration": {Type.pierce: 14, Type.bleed: 10},
+	"pounce": {Type.blunt: 12, Type.pierce: 6},
+	"toad spit": {Type.blunt: 12},
+
+	# Warlock
+	"shadow bolt": {Type.arcane: 12},
+	"void grasp": {Type.arcane: 45},
+	"subversion": {Type.arcane: 15, Type.cold: 15},
 }
 var skill_extra_aggro = {
 	"penetrating blow":50, "shield bash":50, "shield pummel":75, "counterstrike":125, "mighty push":150, "intercept":200, "smite":50,
@@ -4992,6 +5593,17 @@ skills["obliteration charge"].resource_path:3,
 skills["obliteration"].resource_path:3,
 skills["sledge"].resource_path:12,
 skills["reckless"].resource_path:32,
+
+
+# Magic skills
+skills["shadow bolt"].resource_path: 1.0,
+skills["void grasp"].resource_path: 12.0,
+skills["cursed flames"].resource_path: 30.0,
+skills["subversion"].resource_path: 8.0,
+
+
+
+
 skills["plantera screech"].resource_path:10.0,
 skills["plantera scratch"].resource_path:5.0,
 skills["plantera clawstrike"].resource_path:8.0,
@@ -5071,32 +5683,378 @@ var status_icons = {
 }
  
 var debuffs_buffs = {
-	"stunned": {"duration": 2, "malus": true},
-	"plantera screech": {"stackable": true, "duration": 8, "def": -3, "def modified": ["sonic"], "balance": -0.015, "agility": -0.01, "dexterity": -0.03, "mov speed": 0.95, "malus": true},
-	"eat": {"stackable": true, "duration": 8, "def": -3, "regen energy": 3, "instant regen health": 5, "balance": 0.015, "dot timer": 1, "malus": false},
-	"second wind": {"stackable": false, "duration": 3, "regen health": 3, "regen energy": 10, "instant regen health": 15, "dot timer": 1, "malus": false},
-	"aegis": {"stackable": true, "duration": 16, "def": 125, "def modified": ["blunt","slash","pierce","sonic","heat","cold","jolt","toxic","acid","arcane","bleed","radiant"], "balance": 0.25, "toughness": 0.15, "malus": false},
-	"unbreakable": {"stackable": true, "duration": 6, "def": 8, "def modified": ["blunt", "slash", "pierce","cold","acid","heat","jolt","radiant"], "balance": 0.15, "malus": false},
-	"surge": {"stackable": false, "duration": 3, "vitality": 0.15, "regen health": 15, "regen energy": 5, "dot timer": 1, "malus": false},
-	"wrenched": {"stackable": false, "duration": 40, "def": -30, "def modified": ["jolt", "cold"], "balance": -0.05, "agility": -0.01, "mov speed": 0.95, "malus": true},
-	"shoulder bash": {"stackable": true, "duration": 8, "def": -7, "def modified": ["blunt", "slash", "pierce","cold","acid"], "atk":-0.1, "atk modified": ["blunt"], "balance": -0.05, "malus": true},
-	"medicine potion": {"stackable": false, "duration": 8, "regen health": 5, "instant regen health": 25, "dot timer": 1, "malus": false},
-	"energy potion": {"stackable": false, "duration": 16, "regen energy": 10, "instant regen energy": 10, "dot timer": 1, "malus": false},
-	"poison potion": {"stackable": false, "duration": 8, "damage type": Type.toxic, "damage ammount": 15, "dot timer": 1, "malus": true},
-	"infected bite": {"stackable": false, "duration": 15, "damage type": Type.toxic, "damage ammount": 7, "dot timer": 1, "malus": true},
-	"poison shot": {"stackable": false, "duration": 15, "damage type": Type.toxic, "damage ammount": 5, "dot timer": 3, "toughness": -0.5, "def": -15, "def modified": ["acid","toxic"], "malus": true},
-	"web shot": {"stackable": false, "duration": 16, "dexterity": -0.05, "balance": -0.05, "mov speed": 0.25, "malus": true},
-	"power potion": {"stackable": false, "duration": 160, "strength": 0.15, "agility": 0.03, "dexterity": 0.05, "malus": false},
-	"reckless": {"stackable": false, "duration": 11, "strength": 0.35, "impact": 0.35, "agility": 0.035, "dexterity": 0.05, "def": -20, "mov speed": 1.5, "def modified": ["blunt"], "regen energy": 15, "dot timer": 1, "malus": false},
-	"lifeline": {"stackable": false, "duration": 9, "regen health": 5, "regen energy": 12, "instant regen health": 15, "malus": false},
-	"infernal breath":{"stackable":true, "duration":8, "damage type":Type.heat, "damage ammount":10, "def": -5, "def modified": ["heat","slash","blunt","frost"], "dot timer":1, "malus":true},
-	"fire breath":{"stackable":false, "duration":12, "damage type":Type.heat, "damage ammount":16, "dot timer":1, "malus":true},
-	"ice breath":{"stackable":false, "duration":12, "damage type":Type.cold, "damage ammount":16, "mov speed": 0.4, "dot timer":1, "malus":true},
-	"cocytus breath":{"stackable":false, "duration":8, "damage type":Type.cold, "damage ammount":10, "mov speed": 0.4, "dot timer":1, "malus":true},
-	"fire bombardment":{"stackable":false, "duration":10, "damage type":Type.heat, "damage ammount":12, "dot timer":1, "malus":true},
-	"frost bombardment":{"stackable":false, "duration":10, "damage type":Type.cold, "damage ammount":12, "mov speed": 0.4, "dot timer":1, "malus":true},
-	"scorched earth":{"stackable":false, "duration":15, "damage type":Type.heat, "damage ammount":14, "dot timer":1, "malus":true},
-	"frozen earth":{"stackable":false, "duration":15, "damage type":Type.cold, "damage ammount":14, "mov speed": 0.4, "dot timer":1, "malus":true},
+	# ============================================================
+	# GENERAL
+	# ============================================================
+	"stunned": {
+		"duration": 2,
+		"malus": true
+	},
+
+	# ============================================================
+	# PLANTERA
+	# ============================================================
+	"plantera screech": {
+		"stackable": true,
+		"duration": 8,
+		"def": -3,
+		"def modified": ["sonic"],
+		"balance": -0.015,
+		"agility": -0.01,
+		"dexterity": -0.03,
+		"mov speed": 0.95,
+		"malus": true
+	},
+
+	# ============================================================
+	# FOOD / RECOVERY
+	# ============================================================
+	"eat": {
+		"stackable": true,
+		"duration": 8,
+		"def": -3,
+		"regen energy": 3,
+		"instant regen health": 5,
+		"balance": 0.015,
+		"dot timer": 1,
+		"malus": false
+	},
+
+	"second wind": {
+		"stackable": false,
+		"duration": 3,
+		"regen health": 3,
+		"regen energy": 10,
+		"instant regen health": 15,
+		"dot timer": 1,
+		"malus": false
+	},
+
+	"lifeline": {
+		"stackable": false,
+		"duration": 9,
+		"regen health": 5,
+		"regen energy": 12,
+		"instant regen health": 15,
+		"malus": false
+	},
+
+	# ============================================================
+	# DEFENSIVE BUFFS
+	# ============================================================
+	"aegis": {
+		"stackable": true,
+		"duration": 16,
+		"def": 125,
+		"def modified": [
+			"blunt",
+			"slash",
+			"pierce",
+			"sonic",
+			"heat",
+			"cold",
+			"jolt",
+			"toxic",
+			"acid",
+			"arcane",
+			"bleed",
+			"radiant"
+		],
+		"balance": 0.25,
+		"toughness": 0.15,
+		"malus": false
+	},
+
+	"unbreakable": {
+		"stackable": true,
+		"duration": 6,
+		"def": 8,
+		"def modified": [
+			"blunt",
+			"slash",
+			"pierce",
+			"cold",
+			"acid",
+			"heat",
+			"jolt",
+			"radiant"
+		],
+		"balance": 0.15,
+		"malus": false
+	},
+
+	# ============================================================
+	# OFFENSIVE / TEMPORARY BUFFS
+	# ============================================================
+	"surge": {
+		"stackable": false,
+		"duration": 3,
+		"vitality": 0.15,
+		"regen health": 15,
+		"regen energy": 5,
+		"dot timer": 1,
+		"malus": false
+	},
+
+	"power potion": {
+		"stackable": false,
+		"duration": 160,
+		"strength": 0.15,
+		"agility": 0.03,
+		"dexterity": 0.05,
+		"malus": false
+	},
+
+	"reckless": {
+		"stackable": false,
+		"duration": 11,
+		"strength": 0.35,
+		"impact": 0.35,
+		"agility": 0.035,
+		"dexterity": 0.05,
+		"def": -20,
+		"mov speed": 1.5,
+		"def modified": ["blunt"],
+		"regen energy": 15,
+		"dot timer": 1,
+		"malus": false
+	},
+
+	# ============================================================
+	# WARLOCK
+	# ============================================================
+	"cursed flames": {
+		"stackable": false,
+		"duration": 17,
+		"regen energy": 10,
+		"regen arcane": 20,
+		"dot timer": 1,
+		"def": -10,
+		"def modified": [
+			"blunt",
+			"slash",
+			"pierce",
+			"sonic",
+			"heat",
+			"cold",
+			"jolt",
+			"toxic",
+			"acid",
+			"arcane",
+			"bleed",
+			"radiant"
+		],
+		"malus": false
+	},
+	"subversion": {
+		"stackable": true,
+		"duration": 7,
+		"dot timer": 1,
+		"def": -3,
+		"mov speed": 0.95,
+		"strength": -0.05,
+		"balance": -0.05,
+		"power": -0.05,
+		"impact": -0.05,
+		"atk": -0.05,
+		"atk modified": ["blunt","slash","pierce"],
+		"def modified": [
+			"blunt",
+			"slash",
+			"pierce",
+			"sonic",
+			"heat",
+			"cold",
+			"jolt",
+			"toxic",
+			"acid",
+			"arcane",
+			"bleed",
+			"radiant"
+		],
+		"malus": true
+		},
+	# ============================================================
+	# NEGATIVE STATUS EFFECTS
+	# ============================================================
+	"wrenched": {
+		"stackable": false,
+		"duration": 40,
+		"def": -30,
+		"def modified": ["jolt", "cold"],
+		"balance": -0.05,
+		"agility": -0.01,
+		"mov speed": 0.95,
+		"malus": true
+	},
+
+	"shoulder bash": {
+		"stackable": true,
+		"duration": 8,
+		"def": -7,
+		"def modified": [
+			"blunt",
+			"slash",
+			"pierce",
+			"cold",
+			"acid"
+		],
+		"atk": -0.1,
+		"atk modified": ["blunt"],
+		"balance": -0.05,
+		"malus": true
+	},
+
+	"web shot": {
+		"stackable": false,
+		"duration": 16,
+		"dexterity": -0.05,
+		"balance": -0.05,
+		"mov speed": 0.25,
+		"malus": true
+	},
+
+	# ============================================================
+	# POTIONS
+	# ============================================================
+	"medicine potion": {
+		"stackable": false,
+		"duration": 8,
+		"regen health": 5,
+		"instant regen health": 25,
+		"dot timer": 1,
+		"malus": false
+	},
+
+	"energy potion": {
+		"stackable": false,
+		"duration": 16,
+		"regen energy": 10,
+		"instant regen energy": 10,
+		"dot timer": 1,
+		"malus": false
+	},
+
+	"poison potion": {
+		"stackable": false,
+		"duration": 8,
+		"damage type": Type.toxic,
+		"damage ammount": 15,
+		"dot timer": 1,
+		"malus": true
+	},
+
+	# ============================================================
+	# POISON / TOXIC
+	# ============================================================
+	"infected bite": {
+		"stackable": false,
+		"duration": 15,
+		"damage type": Type.toxic,
+		"damage ammount": 7,
+		"dot timer": 1,
+		"malus": true
+	},
+
+	"poison shot": {
+		"stackable": false,
+		"duration": 15,
+		"damage type": Type.toxic,
+		"damage ammount": 5,
+		"dot timer": 3,
+		"toughness": -0.5,
+		"def": -15,
+		"def modified": ["acid", "toxic"],
+		"malus": true
+	},
+
+	# ============================================================
+	# DRAGON / ELEMENTAL BREATHS
+	# ============================================================
+	"infernal breath": {
+		"stackable": true,
+		"duration": 8,
+		"damage type": Type.heat,
+		"damage ammount": 10,
+		"def": -5,
+		"def modified": [
+			"heat",
+			"slash",
+			"blunt",
+			"frost"
+		],
+		"dot timer": 1,
+		"malus": true
+	},
+
+	"fire breath": {
+		"stackable": false,
+		"duration": 12,
+		"damage type": Type.heat,
+		"damage ammount": 16,
+		"dot timer": 1,
+		"malus": true
+	},
+
+	"ice breath": {
+		"stackable": false,
+		"duration": 12,
+		"damage type": Type.cold,
+		"damage ammount": 16,
+		"mov speed": 0.4,
+		"dot timer": 1,
+		"malus": true
+	},
+
+	"cocytus breath": {
+		"stackable": false,
+		"duration": 8,
+		"damage type": Type.cold,
+		"damage ammount": 10,
+		"mov speed": 0.4,
+		"dot timer": 1,
+		"malus": true
+	},
+
+
+	"fire bombardment": {
+		"stackable": false,
+		"duration": 10,
+		"damage type": Type.heat,
+		"damage ammount": 12,
+		"dot timer": 1,
+		"malus": true
+	},
+
+	"frost bombardment": {
+		"stackable": false,
+		"duration": 10,
+		"damage type": Type.cold,
+		"damage ammount": 12,
+		"mov speed": 0.4,
+		"dot timer": 1,
+		"malus": true
+	},
+
+
+	"scorched earth": {
+		"stackable": false,
+		"duration": 15,
+		"damage type": Type.heat,
+		"damage ammount": 14,
+		"dot timer": 1,
+		"malus": true
+	},
+
+	"frozen earth": {
+		"stackable": false,
+		"duration": 15,
+		"damage type": Type.cold,
+		"damage ammount": 14,
+		"mov speed": 0.4,
+		"dot timer": 1,
+		"malus": true
+	}
 }
  
 var status_effects = {}
@@ -5150,7 +6108,10 @@ func getDamages(skill_name:String, weapon_mult:float = 1.0) -> Dictionary:
  
 func getEnergyCost(skill:String) -> float:
 	return skill_energy_cost.get(skill, 0)
- 
+func getArcaneCost(skill: String) -> float:
+	return skill_arcane_cost.get(skill, 0)
+	
+	
 var unbreakable_skills=[
 "raze", "sledge", "stone splitter", "burrow", "web shot", "obliteration", "obliteration charge",
 "infernal breath", "fire breath", "scorched earth", "slam", "fire bombardment", "cocytus breath",
@@ -5371,7 +6332,7 @@ func applyOnHitEffects(skill_name:String,effects:Dictionary,active_cooldowns:Dic
 # Draws exactly 1 aggro from every "aggressive" mob currently inside that
 # square -- tracked per entity so it's a one-time pulse per mob-enter-range
 # event, not continuous spam every frame the mob stays in range.
-export var aggro_pulse_half_size:float = 15.0 # 30m x 30m square (900 sq meters)
+var aggro_pulse_half_size:float = 15.0 # 30m x 30m square (900 sq meters)
 var aggro_pulse_state:Dictionary = {} # entity instance_id -> {mob instance_id: true}
 
 func pulseAggroSignal(entity:Node) -> void:
@@ -5524,6 +6485,82 @@ func flushSkillTreeSaves() -> void:
 	_dirty_skill_tree_saves.clear()
 
 
+var party_leaders := {} # entity_name -> leader_name (self-reported), persists for server session
+
+func getPartyMemberNames(entity_name:String) -> Array:
+	var result := []
+	var roster = party_rosters.get(entity_name, [])
+	for m in roster:
+		var n = str(m.get("entity_name",""))
+		if n != "" and !result.has(n):
+			result.append(n)
+	return result
+
+func getFullPartyMembers(entity_name:String) -> Array:
+	var result := []
+	if entity_name == "":
+		return result
+	for n in getPartyMemberNames(entity_name):
+		if n != entity_name and !result.has(n):
+			result.append(n)
+	for owner_name in findPartyOwnersOfMember(entity_name):
+		if owner_name != entity_name and !result.has(owner_name):
+			result.append(owner_name)
+		for n in getPartyMemberNames(owner_name):
+			if n != entity_name and !result.has(n):
+				result.append(n)
+	return result
+
+func computeLootOwners(attacker) -> Array:
+	var owners := []
+	if attacker == null or !is_instance_valid(attacker) or !("entity_name" in attacker):
+		return owners
+	var aname = str(attacker.entity_name)
+	if aname == "":
+		return owners
+	owners.append(aname)
+	for n in getFullPartyMembers(aname):
+		if !owners.has(n):
+			owners.append(n)
+	return owners
+
+func shareLootWithParty(looter_entity_name:String, corpse_key:String, loot_entries:Array) -> void:
+	if loot_entries.empty():
+		return
+	for member_name in getFullPartyMembers(looter_entity_name):
+		if member_name == looter_entity_name:
+			continue
+		var node = findEntityNodeByName(member_name)
+		if !is_instance_valid(node):
+			continue
+		if node.is_in_group("BOT"):
+			if node.has_method("receivePartyLootShare"):
+				node.receivePartyLootShare(loot_entries)
+			continue
+		var loot_ui = node.get_node_or_null("UI/Loot")
+		if !is_instance_valid(loot_ui):
+			continue
+		if node.has_method("isLocalPlayer") and node.isLocalPlayer():
+			loot_ui.receivePartyLootShare(loot_entries, corpse_key)
+		elif get_tree().network_peer != null:
+			loot_ui.rpc_id(node.get_network_master(), "receivePartyLootShare", loot_entries, corpse_key)
+
+# Restores a bot's party membership after load, by re-inserting it into
+# the leader's roster (server-side, in-memory) and re-running the normal
+# mirror logic so the bot's own reverse-lookup roster gets rebuilt too.
+func restoreBotPartyMembership(bot_name:String, leader_name:String) -> void:
+	if bot_name == "" or leader_name == "" or bot_name == leader_name:
+		return
+	var roster:Array = party_rosters.get(leader_name, [])
+	var found := false
+	for m in roster:
+		if str(m.get("entity_name","")) == bot_name:
+			found = true
+			break
+	if !found:
+		roster.append({"entity_name": bot_name, "peer_id": -1})
+	party_rosters[leader_name] = roster
+	updatePartyRosterAndMirrorBots(leader_name, roster)
 
 
 var _mirrored_bot_owners := {} # bot_entity_name -> owning player's entity_name it was last mirrored under
@@ -5575,7 +6612,7 @@ func isBotEntityName(entity_name:String) -> bool:
 	return false
 # ---------------- trader slot reservation (prevents bot pile-ups) ----------------
 var _trader_slots := {} # trader_instance_id -> {bot_instance_id: slot_index}
-export var trader_max_slots := 4
+var trader_max_slots := 4
 
 func reserveTraderSlot(trader:Node, bot:Node) -> int:
 	if !is_instance_valid(trader) or !is_instance_valid(bot):
@@ -5642,7 +6679,7 @@ func isTraderCrowded(trader:Node, world_id:String) -> bool:
 # ---------------- revive claim system (prevents pile-ups on one downed target) ----------------
 # instance_id (downed entity) -> {"bot_id":int, "claimed_ms":int}
 var _revive_claims := {}
-export var revive_claim_stale_ms:int = 4000
+var revive_claim_stale_ms:int = 4000
 
 func claimReviveTarget(target:Node, bot:Node) -> bool:
 	if !is_instance_valid(target) or !is_instance_valid(bot):
@@ -5692,3 +6729,46 @@ func isReviveTargetClaimedByOther(target:Node, bot:Node) -> bool:
 		_revive_claims.erase(tid)
 		return false
 	return true
+var _warmed_gear_materials := {}
+
+func warmGearMaterials(node: Node) -> void:
+	if !is_instance_valid(node):
+		return
+	call_deferred("_deferredWarmGearMaterials", node)
+
+func _deferredWarmGearMaterials(node: Node) -> void:
+	if !is_instance_valid(node):
+		return
+	var meshes: Array = []
+	_collectUnwarmedGearMeshes(node, meshes)
+	if meshes.empty():
+		return
+	VisualServer.force_draw()
+
+func _collectUnwarmedGearMeshes(node: Node, out: Array) -> void:
+	if node is MeshInstance and is_instance_valid(node) and node.mesh != null:
+		var newly_marked := false
+		if node.material_override != null:
+			var key := _gearMaterialKey(node.material_override)
+			if !_warmed_gear_materials.has(key):
+				_warmed_gear_materials[key] = true
+				newly_marked = true
+		for i in range(node.mesh.get_surface_count()):
+			var mat = node.get_surface_material(i)
+			if mat == null:
+				mat = node.mesh.surface_get_material(i)
+			if mat != null:
+				var key2 := _gearMaterialKey(mat)
+				if !_warmed_gear_materials.has(key2):
+					_warmed_gear_materials[key2] = true
+					newly_marked = true
+		if newly_marked:
+			out.append(node)
+	for child in node.get_children():
+		if is_instance_valid(child):
+			_collectUnwarmedGearMeshes(child, out)
+
+func _gearMaterialKey(mat: Material) -> String:
+	if mat.resource_path != "":
+		return mat.resource_path
+	return "anon_" + str(mat.get_instance_id())

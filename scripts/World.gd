@@ -493,6 +493,55 @@ func savePositionsOnlyForAllPlayers() -> void:
 			continue
 		savePlayerStateTo(player, getPlayerSaveBaseDir() + player.entity_name + "/")
  
+
+
+
+
+
+
+
+
+
+func getPartySaveDir(entity_name:String) -> String:
+	return getPlayerSaveBaseDir() + entity_name + "/"
+
+func savePartyTo(party_node:Node, entity_name:String) -> void:
+	if !is_instance_valid(party_node) or !party_node.has_method("gatherPartySnapshot"):
+		return
+	queueFileWrite(getPartySaveDir(entity_name) + "party.save", party_node.gatherPartySnapshot())
+
+func savePartyFor(player:Node, data:Dictionary) -> void:
+	if !is_instance_valid(player) or !("entity_name" in player) or player.entity_name == "":
+		return
+	if get_tree().network_peer != null and !get_tree().is_network_server():
+		rpc_id(1, "requestSaveParty", player.entity_name, data)
+		return
+	queueFileWrite(getPartySaveDir(player.entity_name) + "party.save", data)
+
+remote func requestSaveParty(entity_name:String, data:Dictionary) -> void:
+	if !get_tree().is_network_server():
+		return
+	queueFileWrite(getPartySaveDir(entity_name) + "party.save", data)
+
+func readPartySave(path:String) -> Dictionary:
+	var file := File.new()
+	if !file.file_exists(path):
+		return {}
+	if file.open(path, File.READ) != OK:
+		return {}
+	var data = file.get_var()
+	file.close()
+	if typeof(data) != TYPE_DICTIONARY:
+		return {}
+	return data
+
+
+
+
+
+
+
+
 export var frozen_mob_recheck_interval:int = 90 # was 30 — has_method scan was dead weight every 0.5s
 
 func recheckFrozenMobs() -> void:
@@ -521,25 +570,42 @@ func saveRecursive(node):
 func scanSaveableNodes(node) -> void:
 	if node is Occluder:
 		return
- 
+
 	if isUnderLandscapeHolder(node):
 		return
- 
+
+	# Nothing that ever implements saveData() lives under a "character"
+	# root (Skeleton, bones, MeshInstances, weapon/shield scenes attached
+	# to BoneAttachments) -- but bots reparent weapon nodes in and out of
+	# bone holders constantly during combat, which changes child counts
+	# all the way up that subtree and forced a full recursive rescan of
+	# it every single time. Cutting the walk off at "character" removes
+	# that entire (large, frequently-churning) subtree from the scan.
+	if node.name == "character":
+		return
+	if node.name == "occluder":
+		return
+	if node.name == "AnimationPlayer":
+		return
 	var id = node.get_instance_id()
 	var current_child_count = node.get_child_count()
- 
+
 	if _scanned_child_count.has(id) and _scanned_child_count[id] == current_child_count:
 		return
- 
+
 	_scanned_child_count[id] = current_child_count
- 
+
 	if node.has_method("saveData") and !cached_saveable_nodes.has(node):
 		cached_saveable_nodes.append(node)
- 
+
 	for child in node.get_children():
 		if is_instance_valid(child):
 			scanSaveableNodes(child)
- 
+
+
+
+
+
 func isUnderLandscapeHolder(node) -> bool:
 	var holder = get_node_or_null("LandscapeHolder")
 	if holder == null:
@@ -662,47 +728,6 @@ func startStaggeredAutosave() -> void:
 	Global.saveListings()
 	queueSaveRecursive(self)
 	_autosave_running = false
-func staggeredSaveMobData() -> void:
-	var saveDirectory = getMobSaveBaseDir() + world_id + "/"
-	var savePath = saveDirectory + world_id + ".save"
-	var dir = Directory.new()
-	if !dir.dir_exists(saveDirectory):
-		dir.make_dir_recursive(saveDirectory)
-
-	var old_data = {}
-	var old_file = File.new()
-	if old_file.file_exists(savePath) and old_file.open(savePath, File.READ) == OK:
-		old_data = old_file.get_var()
-		old_file.close()
-
-	var mob_list := []
-	for entity in getAllEntities():
-		if is_instance_valid(entity) and !entity.is_in_group("Player"):
-			mob_list.append(entity)
-
-	var batch_count = max(1, int(ceil(float(mob_list.size()) / float(max(autosave_entities_per_batch, 1)))))
-	var delay_between_batches = autosave_min_spread_time / float(batch_count)
-
-	var entityData := []
-	var n := 0
-	for entity in mob_list:
-		if !is_instance_valid(entity):
-			continue
-		var entry = buildSaveEntry(entity)
-		entry["world_id"] = world_id
-		entityData.append(entry)
-		n += 1
-		if n % autosave_entities_per_batch == 0:
-			yield(get_tree().create_timer(delay_between_batches), "timeout")
-
-	old_data["mobs"] = entityData
-
-	var file = File.new()
-	if file.open(savePath, File.WRITE) == OK:
-		file.store_var(old_data)
-		file.close()
-
-	saveResourceStates()
 
 func staggeredSavePlayers() -> void:
 	var players := findPlayersToSave()
@@ -773,42 +798,7 @@ func _writePlayerStateToDir(player_dir:String, data:Dictionary) -> void:
 	data["positions"] = positions
 
 	queueFileWrite(save_path, data)
-func saveData():
-	if get_tree().network_peer != null and !get_tree().is_network_server():
-		return
-	print("world.gd saved data")
-	var saveDirectory = getMobSaveBaseDir() + world_id + "/"
-	var savePath = saveDirectory + world_id + ".save"
-	var dir = Directory.new()
- 
-	if !dir.dir_exists(saveDirectory):
-		dir.make_dir_recursive(saveDirectory)
- 
-	var old_data = {}
-	var old_file = File.new()
- 
-	if old_file.file_exists(savePath) and old_file.open(savePath, File.READ) == OK:
-		old_data = old_file.get_var()
-		old_file.close()
- 
-	var entityData = []
- 
-	for entity in getAllEntities():
-		if is_instance_valid(entity) and !entity.is_in_group("Player"):
-			var entry = buildSaveEntry(entity)
-			entry["world_id"] = world_id
-			entityData.append(entry)
- 
-	old_data["mobs"] = entityData
- 
-	var file = File.new()
-	if file.open(savePath, File.WRITE) == OK:
-		file.store_var(old_data)
-		file.close()
-	saveResourceStates()
-	savePlayers()
-	Global.saveListings()
- 
+
  
  
  
@@ -940,7 +930,33 @@ func getServerAddressId() -> String:
  
  
  
- 
+const BOT_SAVE_DIR := "user://BotSaves/"
+
+func getBotSaveDir() -> String:
+	return BOT_SAVE_DIR + world_id + "/"
+
+func getBotSavePath(bot_node_name:String) -> String:
+	return getBotSaveDir() + bot_node_name + ".save"
+
+func saveBotFor(bot:Node, data:Dictionary) -> void:
+	if get_tree().network_peer != null and !get_tree().is_network_server():
+		return
+	if !is_instance_valid(bot):
+		return
+	queueFileWrite(getBotSavePath(bot.name), data)
+
+func readBotSave(bot_node_name:String) -> Dictionary:
+	var path = getBotSavePath(bot_node_name)
+	var file := File.new()
+	if !file.file_exists(path):
+		return {}
+	if file.open(path, File.READ) != OK:
+		return {}
+	var data = file.get_var()
+	file.close()
+	if typeof(data) != TYPE_DICTIONARY:
+		return {}
+	return data
  
 func savePlayerData(player:Node, base_dir:String) -> void:
 	if !("entity_name" in player) or player.entity_name == "":
@@ -1040,9 +1056,13 @@ func savePlayerData(player:Node, base_dir:String) -> void:
 		else:
 			saveQuestsTo(quest_node, player.entity_name)
  
- 
- 
- 
+	 var party_node = ui.get_node_or_null("Party")
+		if is_instance_valid(party_node):
+			if is_remote_player:
+				party_node.rpc_id(player.get_network_master(), "requestSelfSaveParty")
+			else:
+				savePartyTo(party_node, player.entity_name)
+	 
  
  
  
@@ -1631,8 +1651,13 @@ func loadPlayerData(player:Node, base_dir:String) -> void:
 		var quest_snapshot = readQuestsSave(getQuestsSaveDir(player.entity_name) + "quests.save")
 		if !quest_snapshot.empty() and quests.has_method("applyOwnQuestSnapshot"):
 			quests.applyOwnQuestSnapshot(quest_snapshot)
+	var party = ui.get_node_or_null("Party")
+	if is_instance_valid(party):
+		var party_snapshot = readPartySave(getPartySaveDir(player.entity_name) + "party.save")
+		if !party_snapshot.empty() and party.has_method("applyOwnPartySnapshot"):
+			party.applyOwnPartySnapshot(party_snapshot)
 
-
+	yield(get_tree(), "idle_frame")
 
 
 
@@ -1695,30 +1720,101 @@ func loadResourceStatesFile():
 	else:
 		resource_states = {}
  
-func saveResourceStates():
+func staggeredSaveMobData() -> void:
+	var saveDirectory = getMobSaveBaseDir() + world_id + "/"
+	var savePath = saveDirectory + world_id + ".save"
+
+	var old_data = {}
+	var old_file = File.new()
+	if old_file.file_exists(savePath) and old_file.open(savePath, File.READ) == OK:
+		old_data = old_file.get_var()
+		old_file.close()
+
+	var mob_list := []
+	for entity in getAllEntities():
+		if is_instance_valid(entity) and !entity.is_in_group("Player"):
+			mob_list.append(entity)
+
+	var batch_count = max(1, int(ceil(float(mob_list.size()) / float(max(autosave_entities_per_batch, 1)))))
+	var delay_between_batches = autosave_min_spread_time / float(batch_count)
+
+	var entityData := []
+	var n := 0
+	for entity in mob_list:
+		if !is_instance_valid(entity):
+			continue
+		var entry = buildSaveEntry(entity)
+		entry["world_id"] = world_id
+		entityData.append(entry)
+		n += 1
+		if n % autosave_entities_per_batch == 0:
+			yield(get_tree().create_timer(delay_between_batches), "timeout")
+
+	old_data["mobs"] = entityData
+
+	# FIX: this was a synchronous File.open()/store_var()/close() right
+	# here on the main thread, serializing ~150 mobs' worth of data in
+	# one blocking call every autosave cycle. Any main-thread stall is
+	# exactly what tips Godot's physics catch-up into the runaway spiral
+	# described in Global.gd._ready(). Route through the background
+	# write thread like every other save path already does.
+	queueFileWrite(savePath, old_data)
+
+	saveResourceStates()
+
+
+func saveResourceStates() -> void:
 	if get_tree().network_peer != null and !get_tree().is_network_server():
 		return
- 
+
 	for gatherable in get_tree().get_nodes_in_group("Resource"):
 		if !is_instance_valid(gatherable):
 			continue
- 
+
 		resource_states[getGatherableKey(gatherable)] = {
 			"amount": gatherable.resource_amount,
 			"depleted_time": gatherable.depleted_time,
 			"rotation": gatherable.rotation
 		}
- 
+
 	var saveDirectory = getMobSaveBaseDir() + world_id + "/"
 	var path = saveDirectory + "resources.save"
-	var dir = Directory.new()
-	if !dir.dir_exists(saveDirectory):
-		dir.make_dir_recursive(saveDirectory)
-	var file = File.new()
-	if file.open(path, File.WRITE) == OK:
-		file.store_var(resource_states)
-		file.close()
- 
+
+	# FIX: same synchronous-write-on-main-thread problem as
+	# staggeredSaveMobData() above. Moved to the background thread.
+	queueFileWrite(path, resource_states)
+
+
+func saveData():
+	if get_tree().network_peer != null and !get_tree().is_network_server():
+		return
+	print("world.gd saved data")
+	var saveDirectory = getMobSaveBaseDir() + world_id + "/"
+	var savePath = saveDirectory + world_id + ".save"
+
+	var old_data = {}
+	var old_file = File.new()
+
+	if old_file.file_exists(savePath) and old_file.open(savePath, File.READ) == OK:
+		old_data = old_file.get_var()
+		old_file.close()
+
+	var entityData = []
+
+	for entity in getAllEntities():
+		if is_instance_valid(entity) and !entity.is_in_group("Player"):
+			var entry = buildSaveEntry(entity)
+			entry["world_id"] = world_id
+			entityData.append(entry)
+
+	old_data["mobs"] = entityData
+
+	# FIX: was a synchronous main-thread write (manual "savedata" key,
+	# portal, respawn) -- same runaway-catch-up risk. Queued instead.
+	queueFileWrite(savePath, old_data)
+	saveResourceStates()
+	savePlayers()
+	Global.saveListings()
 func _entityIdentifier(node:Node) -> String:
 	if node.is_in_group("Player") and "entity_name" in node and node.entity_name != "":
 		return "player:" + node.entity_name
@@ -1763,6 +1859,7 @@ func buildFullPlayerSnapshot(entity_name:String, world_id:String) -> Dictionary:
 		"state": readPlayerStateSave(player_dir + "playerstate.save"),
 		"loot": readLootSave(player_dir + "corpse_loot_" + world_id + ".save"),
 		"quests": readQuestsSave(player_dir + "quests.save"),
+		"party": readPartySave(getPartySaveDir(entity_name) + "party.save"),
 	}
  
  

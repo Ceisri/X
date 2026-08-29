@@ -18,6 +18,7 @@ onready var stats =$Stats
 onready var camroot = $Camroot
 onready var camera_v = $Camroot/h/v
 onready var camera_h = $Camroot/h
+onready var camera = $Camroot/h/v/Camera
 onready var skillbar = $UI/Skillbar
 onready var loot = $UI/Loot
 onready var inventory = $UI/Inventory
@@ -238,6 +239,7 @@ func playerReady()->void:
 			Network.connect("reconnected", self, "_onReconnected")
 			Network.connect("reconnect_failed", self, "_onReconnectFailedUI")
 	reactivateAnimationTree()
+	warmupAnimationTreeOnce()
 	if !_is_pooled_idle and isLocalPlayer():
 		
 		yield(get_tree(),"idle_frame")
@@ -257,7 +259,6 @@ func playerReady()->void:
 		_markEntityReady()
 	registerInGlobal()
 	setupPlayerCollisionLayer()
-	
 	
 	
 	
@@ -850,7 +851,47 @@ var interrupt_groups = {
 }
 
 
-var skill_animations = {
+var skill_animations:Dictionary = {
+	
+	# ============================================================
+	# MAGIC / WARLOCK SKILLS
+	# ============================================================
+	"shadow bolt":{
+		WeaponMode.NONE:"Flinch_OneHanded",
+		WeaponMode.SWORD:"Flinch_OneHanded",
+		WeaponMode.DUAL:"Flinch_OneHanded",
+		WeaponMode.SHIELD:"Flinch_OneHanded",
+		WeaponMode.TWO_HANDED:"Flinch_OneHanded",
+	},
+
+	"void grasp":{
+		WeaponMode.NONE:"Flinch_OneHanded",
+		WeaponMode.SWORD:"Flinch_OneHanded",
+		WeaponMode.DUAL:"Flinch_OneHanded",
+		WeaponMode.SHIELD:"Flinch_OneHanded",
+		WeaponMode.TWO_HANDED:"Flinch_OneHanded",
+	},
+
+	"cursed flames":{
+		WeaponMode.NONE:"Flinch_OneHanded",
+		WeaponMode.SWORD:"Flinch_OneHanded",
+		WeaponMode.DUAL:"Flinch_OneHanded",
+		WeaponMode.SHIELD:"Flinch_OneHanded",
+		WeaponMode.TWO_HANDED:"Flinch_OneHanded",
+	},
+	"subversion":{
+		WeaponMode.NONE:"Flinch_OneHanded",
+		WeaponMode.SWORD:"Flinch_OneHanded",
+		WeaponMode.DUAL:"Flinch_OneHanded",
+		WeaponMode.SHIELD:"Flinch_OneHanded",
+		WeaponMode.TWO_HANDED:"Flinch_OneHanded",
+	},
+	
+	
+	
+	
+	
+	
 	
 	
 	"mine":{
@@ -1191,9 +1232,7 @@ var skill_animations = {
 		WeaponMode.DUAL:"DownedStart",
 		WeaponMode.SHIELD:"DownedStart",
 		WeaponMode.TWO_HANDED:"DownedStart",
-	},
-
-}
+	},}
 var last_skill_animation:String =""
 var guard_react_priority := false
 
@@ -1547,6 +1586,21 @@ func setAnimRaw(path:String, value) -> void:
 				return
 	_raw_anim_set_cache[path] = value
 	animation_tree.set(path, value)
+var _animation_tree_warmed_once := false
+func warmupAnimationTreeOnce() -> void:
+	if _animation_tree_warmed_once:
+		return
+	if !is_instance_valid(animation_tree):
+		return
+	if !shouldAnimateLocally():
+		return
+	_animation_tree_warmed_once = true
+	animation_tree.active = false
+	call_deferred("_finishAnimationTreeWarmup")
+
+func _finishAnimationTreeWarmup() -> void:
+	if is_instance_valid(animation_tree):
+		animation_tree.active = true
 var skillExitBlendSpeed:float = 2.0
 func animationOrder(delta:float) -> void:
 	if stats.debuff_buffs_active.has("stunned") and float(stats.debuff_buffs_active["stunned"].get("duration",0.0)) > 0.0:
@@ -2050,6 +2104,7 @@ func detectObjects()->void:
 			recipes_book.show()
 			inventory.show()
 			crafting.show()
+			recipes_book.hide()
 			return
 		
 		elif target.is_in_group("QuestGiver") and Input.is_action_just_pressed("Harvest"):
@@ -2165,8 +2220,6 @@ func cancelRevive() -> void:
 	if is_instance_valid(prog_texture):
 		prog_texture.value = 0.0
 		prog_texture.visible = false
-	if is_instance_valid(label):
-		label.visible = false
 		
 	
 
@@ -2192,12 +2245,22 @@ var _last_processed_visual_frame_player:int = -1
 var _accumulated_delta_player:float = 0.0
 func _physics_process(delta) -> void:
 	playerPhyProcess(delta)
-	
+var _last_processed_visual_frame_master:int = -1
+var _accumulated_delta_master:float = 0.0
+
 func playerPhyProcess(delta)->void: #EXISTS only to profile ms cost
 	if isLocalPlayer():
-		physicsProcessMaster(delta)
+		_accumulated_delta_master += delta
+		var visual_frame_m:int = Engine.get_frames_drawn()
+		if visual_frame_m == _last_processed_visual_frame_master:
+			return
+		_last_processed_visual_frame_master = visual_frame_m
+		var frame_delta:float = _accumulated_delta_master
+		_accumulated_delta_master = 0.0
+
+		physicsProcessMaster(frame_delta)
 		if shouldAnimateLocally():
-			animationOrder(delta)
+			animationOrder(frame_delta)
 	else:
 		_physics_process_puppet(delta)
 		_accumulated_delta_player += delta
@@ -2213,7 +2276,6 @@ func playerPhyProcess(delta)->void: #EXISTS only to profile ms cost
 	collisionShapesManager()
 
 
-
 var frame_scale_smooth_time:float = 0.12
 var _last_processed_visual_frame:int = -1
 var _accumulated_master_delta:float = 0.0
@@ -2222,36 +2284,30 @@ func physicsProcessMaster(delta) -> void:
 	if _player_frame_offset == -1:
 		_player_frame_offset = int(get_instance_id() % 60)
 
-	buoyancy(delta)
 
+
+	buoyancy(delta)
 	if current_skill != "" and current_skill != "none":
 		rootMotion(delta)
-
 	if anim_locks["stunned"] == false and anim_locks["staggered"] == false and is_dead == false:
 		jump()
 		movement(delta)
-
 	physics(delta)
-
 	forceMovementAnimUnlock()
 	checkSkillHardDeadline()
 	checkFall()
 	_syncToPuppets(delta)
 	detectDownedPlayer()
 	var frame:int = Engine.get_physics_frames() + _player_frame_offset
-	
+	if !reviving_target_active:
+		detectGathering()
+		detectObjects()	
 	if frame % 6 == 0:
 		dodgeCollisions(delta * 6)
 		if stats.health <= 0:
 			skillbar.combo_queue = 0
 			skillbar.continue_combo_atk = false
 			anim_locks["combo attack"] = false
-		if !reviving_target_active:
-			detectGathering()
-			detectObjects()
-	else:
-		if Global.skill_dmg_immunity.has(current_skill) != (!_collisions_are_enabled):
-			dodgeCollisions(delta)
 	if frame % 18 == 0:
 		if is_instance_valid(crossair_inspect) and crossair_inspect.has_method("crossairInspect"):
 			crossair_inspect.crossairInspect(self)
@@ -2262,7 +2318,7 @@ func physicsProcessMaster(delta) -> void:
 				loot.hide()
 				
 	if frame % 60 == 0:
-		updateDownedState()
+		respawnSystem()
 		updateBeingRevivedUI()
 	if current_skill == "mine" or current_skill == "chop" or current_skill == "gather":
 		if !chat.line_edit.has_focus():
@@ -2273,19 +2329,141 @@ func physicsProcessMaster(delta) -> void:
 	if Input.is_action_just_pressed("debug"):
 		if is_writing == false and is_chatting == false:
 			reportAllBotCoordinates()
+	if Input.is_action_just_pressed("respawn"):
+		world.respawnToNearestGraveyard()
+	if Input.is_action_just_pressed("unstuck"):
+		unstuckPlayer()
+	if Input.is_action_just_pressed("skills"):
+		skill_tree_root.visible = !skill_tree_root.visible
+		inventory.visible = false
+		equipment.visible = false
 
-
+#previous 
+#func physics(delta):
+#	if root_motion_active and current_skill != "" and current_skill != "none":
+#		if is_in_water:
+#			translation.y += vertical_velocity.y * get_physics_process_delta_time()
+#
+#			movement.x = horizontal_velocity.x
+#			movement.y = 0
+#			movement.z = horizontal_velocity.z
+#
+#			move_and_slide(
+#				movement,
+#				Vector3.ZERO,
+#				false,
+#				4,
+#				PI,
+#				false
+#			)
+#		else:
+#			vertical_velocity = move_and_slide(
+#				vertical_velocity,
+#				Vector3.ZERO,
+#				false,
+#				4,
+#				PI,
+#				false
+#			)
+#		return
+#
+#	elif root_motion_active:
+#		root_motion_active = false
+#
+#	if is_dashing:
+#		dash_time += delta
+#		dash_timer -= delta
+#
+#		var dash_dir = direction.normalized()
+#
+#		if dash_phase == 0:
+#			dash_current_speed = dash_start_speed
+#			if dash_time >= dash_start_delay:
+#				dash_phase = 1
+#				dash_time = 0.0
+#
+#		elif dash_phase == 1:
+#			dash_current_speed = dash_start_speed
+#			if dash_time >= 0.05:
+#				dash_phase = 2
+#				dash_time = 0.0
+#
+#		elif dash_phase == 2:
+#			dash_current_speed = lerp(
+#				dash_current_speed,
+#				dash_max_power,
+#				12.0 * delta
+#			)
+#
+#		horizontal_velocity = dash_dir * dash_current_speed
+#
+#		if dash_timer <= 0.0:
+#			is_dashing = false
+#			dash_phase = 0
+#			dash_turn_multiplier = 1.0
+#
+#	else:
+#		if direction == Vector3.ZERO:
+#			horizontal_velocity = Vector3.ZERO
+#		else:
+#			horizontal_velocity = horizontal_velocity.linear_interpolate(
+#				direction.normalized() * movement_speed,
+#				clamp(acceleration * delta, 0.0, 1.0)
+#			)
+#
+#	# ---- GRAVITY ----
+#	# This was missing entirely. Without a downward vertical_velocity
+#	# constantly pushing the body into the floor collider, is_on_floor()
+#	# never reliably returns true, which is why jump() (which requires
+#	# is_on_floor() == true) never fired.
+#	if is_on_floor():
+#		if vertical_velocity.y <= 0.0:
+#			vertical_velocity.y = -1.0  # re-press into floor only when NOT mid-jump this frame
+#	else:
+#		vertical_velocity.y -= gravity * delta
+#
+#	movement.x = horizontal_velocity.x
+#	movement.y = vertical_velocity.y
+#	movement.z = horizontal_velocity.z
+#
+#	if on_platform and is_instance_valid(platform):
+#		var basis = platform.global_transform.basis
+#		var local_move = Vector3(horizontal_velocity.dot(basis.x),0,-horizontal_velocity.dot(basis.z)) * delta
+#		platform_local.origin += local_move
+#		if !is_in_water:
+#			platform_local.origin.y += vertical_velocity.y * delta
+#		global_transform = platform.global_transform * platform_local
+#		var plat_result = move_and_slide(Vector3(0, movement.y, 0),Vector3.UP)
+#		vertical_velocity.y = plat_result.y
+#		platform_local.origin.y = platform.to_local(global_transform.origin).y
+#		if !is_on_floor():
+#			on_platform = false
+#			platform = null
+#		return
+#	if is_in_water:
+#		translation.y += vertical_velocity.y * get_physics_process_delta_time()
+#		movement.x = horizontal_velocity.x
+#		movement.y = 0
+#		movement.z = horizontal_velocity.z
+#		move_and_slide(movement,Vector3.ZERO,false,4,PI,false)
+#	else:
+#		movement = move_and_slide(Vector3(horizontal_velocity.x,vertical_velocity.y,horizontal_velocity.z),Vector3.UP,true, 4,PI/4,true)
+#		vertical_velocity.y = movement.y
+#
 func physics(delta):
+	var physics_dt:float = get_physics_process_delta_time()
+	var move_scale:float = (delta / physics_dt) if physics_dt > 0.0 else 1.0
+
 	if root_motion_active and current_skill != "" and current_skill != "none":
 		if is_in_water:
-			translation.y += vertical_velocity.y * get_physics_process_delta_time()
+			translation.y += vertical_velocity.y * delta
 
 			movement.x = horizontal_velocity.x
 			movement.y = 0
 			movement.z = horizontal_velocity.z
 
 			move_and_slide(
-				movement,
+				movement * move_scale,
 				Vector3.ZERO,
 				false,
 				4,
@@ -2293,14 +2471,15 @@ func physics(delta):
 				false
 			)
 		else:
-			vertical_velocity = move_and_slide(
-				vertical_velocity,
+			var rm_result = move_and_slide(
+				vertical_velocity * move_scale,
 				Vector3.ZERO,
 				false,
 				4,
 				PI,
 				false
 			)
+			vertical_velocity = (rm_result / move_scale) if move_scale > 0.0 else rm_result
 		return
 
 	elif root_motion_active:
@@ -2348,13 +2527,9 @@ func physics(delta):
 			)
 
 	# ---- GRAVITY ----
-	# This was missing entirely. Without a downward vertical_velocity
-	# constantly pushing the body into the floor collider, is_on_floor()
-	# never reliably returns true, which is why jump() (which requires
-	# is_on_floor() == true) never fired.
 	if is_on_floor():
 		if vertical_velocity.y <= 0.0:
-			vertical_velocity.y = -1.0  # re-press into floor only when NOT mid-jump this frame
+			vertical_velocity.y = -1.0
 	else:
 		vertical_velocity.y -= gravity * delta
 
@@ -2369,24 +2544,23 @@ func physics(delta):
 		if !is_in_water:
 			platform_local.origin.y += vertical_velocity.y * delta
 		global_transform = platform.global_transform * platform_local
-		var plat_result = move_and_slide(Vector3(0, movement.y, 0),Vector3.UP)
-		vertical_velocity.y = plat_result.y
+		var plat_result = move_and_slide(Vector3(0, movement.y, 0) * move_scale,Vector3.UP)
+		vertical_velocity.y = (plat_result.y / move_scale) if move_scale > 0.0 else plat_result.y
 		platform_local.origin.y = platform.to_local(global_transform.origin).y
 		if !is_on_floor():
 			on_platform = false
 			platform = null
 		return
 	if is_in_water:
-		translation.y += vertical_velocity.y * get_physics_process_delta_time()
+		translation.y += vertical_velocity.y * delta
 		movement.x = horizontal_velocity.x
 		movement.y = 0
 		movement.z = horizontal_velocity.z
-		move_and_slide(movement,Vector3.ZERO,false,4,PI,false)
+		move_and_slide(movement * move_scale,Vector3.ZERO,false,4,PI,false)
 	else:
-		movement = move_and_slide(Vector3(horizontal_velocity.x,vertical_velocity.y,horizontal_velocity.z),Vector3.UP,true, 4,PI/4,true)
+		var result = move_and_slide(Vector3(horizontal_velocity.x,vertical_velocity.y,horizontal_velocity.z) * move_scale,Vector3.UP,true, 4,PI/4,true)
+		movement = (result / move_scale) if move_scale > 0.0 else result
 		vertical_velocity.y = movement.y
-
-
 
 
 
@@ -2718,7 +2892,10 @@ func movement(delta) -> void:
 		can_rotate = Global.skill_rotation_allowed.get(current_skill, false)
 
 	if is_instance_valid(player_mesh) and is_instance_valid(turnable):
-		if can_rotate:
+		if Global.isRanged(current_skill):
+			player_mesh.rotation.y = lerp_angle(player_mesh.rotation.y, camera_h.rotation.y, delta * angular_acceleration)
+
+		elif can_rotate:
 			for anim_name in anim_locks:
 				if anim_locks[anim_name] and !Global.skill_rotation_allowed.get(anim_name,false):
 					can_rotate=false
@@ -2730,7 +2907,6 @@ func movement(delta) -> void:
 				var target_rot=atan2(direction.x,direction.z)-rotation.y
 				player_mesh.rotation.y=lerp_angle(player_mesh.rotation.y,target_rot,delta*angular_acceleration)
 				turnable.rotation.y=lerp_angle(turnable.rotation.y,target_rot,delta*angular_acceleration)
-
 func forceMovementAnimUnlock()->void:
 	if animation_almost_finished == true:
 		if Input.is_action_pressed("sprint"):
@@ -2893,35 +3069,61 @@ func disableFallDamage():
 	highest_y = global_transform.origin.y
 	
 	
-export var airborne_coyote_time := 0.12 # grace window before a single is_on_floor() flicker commits to the fall animation
+var airborne_coyote_time := 0.12 # grace window before a single is_on_floor() flicker commits to the fall animation
 var airborne_stuck_timer := 0.0
-export var airborne_stuck_timeout := 1.5 # seconds "airborne" with near-zero vertical speed before we force a landing
-
-
+var airborne_stuck_timeout := 1.5 # seconds "airborne" with near-zero vertical speed before we force a landing
+var _airborne_confirm_counter:int = 0
+var airborne_confirm_frames:int = 12   # must be not-on-floor this many CONSECUTIVE physics ticks before we commit to "falling" -- kills walk/fall flicker on bumpy flat ground
+var _spawn_floor_snap_done := false
 func checkFall():
-	if ground_raycast.is_colliding() and is_on_floor():
+	# Unified floor determination used consistently through the whole
+	# function -- previously the very first grounded check only trusted
+	# ground_raycast, while the debounce logic further down only trusted
+	# $DistanceToFloordRay, so a bump/seam that one ray caught and the
+	# other missed produced two different answers about whether the
+	# player was grounded within the SAME tick. That mismatch is what let
+	# a single-frame raycast gap slip past the debounce and flicker the
+	# walk/fall animation on otherwise flat ground. Both rays now count
+	# as confirmation, computed once, reused everywhere below.
+	var on_floor := is_on_floor()
+	if !on_floor and vertical_velocity.y <= 0.0:
+		if is_instance_valid(ground_raycast) and ground_raycast.is_colliding():
+			on_floor = true
+		elif is_instance_valid($DistanceToFloordRay) and $DistanceToFloordRay.is_colliding():
+			on_floor = true
+
+	if on_floor:
 		is_airborne = false
+		_airborne_confirm_counter = 0
 		setAnimRaw("parameters/WaterLandAir/blend_amount",land)
 		setAnimRaw("parameters/ClimbingOrFalling/blend_amount",falling)
+
 	if on_platform and is_instance_valid(platform):
 		return
 	if fall_damage_grace_period > 0.0:
 		fall_damage_grace_period -= get_physics_process_delta_time()
-		was_on_floor = is_on_floor()
+		was_on_floor = on_floor
+		_airborne_confirm_counter = 0
 		highest_y = global_transform.origin.y
 		return
 	if is_in_water:
 		is_airborne = false
+		_airborne_confirm_counter = 0
 		airborne_delay = 0.0
 		return
 
-	var on_floor := is_on_floor()
-	if !on_floor and vertical_velocity.y <= 0.0 and is_instance_valid($DistanceToFloordRay) and $DistanceToFloordRay.is_colliding():
-		on_floor = true
-	# Left ground
-	if was_on_floor and !on_floor:
+	if on_floor:
+		_airborne_confirm_counter = 0
+	else:
+		if _airborne_confirm_counter == 0:
+			highest_y = global_transform.origin.y
+		_airborne_confirm_counter += 1
+
+	var confirmed_airborne:bool = _airborne_confirm_counter >= airborne_confirm_frames
+
+	# Left ground (debounced -- only commits after sustained not-on-floor)
+	if confirmed_airborne and !is_airborne:
 		is_in_combat = false
-		highest_y = global_transform.origin.y
 
 		if Input.is_action_pressed("sprint"):
 			airborne_delay = 0.3
@@ -2929,7 +3131,6 @@ func checkFall():
 		else:
 			airborne_delay = 0.0
 			is_airborne = true
-
 
 	if is_airborne and !is_climbing:
 		movement_mode = "fall"
@@ -2951,9 +3152,9 @@ func checkFall():
 				applyFallDamage(fall_distance)
 
 		is_airborne = false
+		_airborne_confirm_counter = 0
 
 	was_on_floor = on_floor
-
 
 	if is_airborne and abs(vertical_velocity.y) < 0.5 and !is_climbing:
 		airborne_stuck_timer += get_physics_process_delta_time()
@@ -2963,13 +3164,13 @@ func checkFall():
 			airborne_stuck_timer = 0.0
 	else:
 		airborne_stuck_timer = 0.0
-	
-	if is_airborne ==true:
+
+	if is_airborne == true:
 		setAnimRaw("parameters/WaterLandAir/blend_amount",air)
 		setAnimRaw("parameters/ClimbingOrFalling/blend_amount",falling)
-	
-	
+
 	checkStuckBetweenCollisions()
+
 
 
 
@@ -3346,7 +3547,8 @@ func startGetUpSequence() -> void:
 	anim_locks["get up"] = false
 	current_skill = ""
 var downed_elapsed_frames:int = 0
-func updateDownedState() -> void:
+onready var world = get_parent()
+func respawnSystem() -> void:
 	if stats.health > 0:
 		downed_elapsed_time = 0.0
 		return
@@ -3361,10 +3563,11 @@ func updateDownedState() -> void:
 		label.text = "Respawning in " + str(remaining) + "s"
 
 	if downed_elapsed_time >= self_downed_autorespawn_time:
-		var world = get_parent()
-		if is_instance_valid(world) and world.has_method("respawnToNearestGraveyard"):
-			world.respawnToNearestGraveyard()
+		world.respawnToNearestGraveyard()
 
+	
+	
+	
 func findRespawnCandidates(root=null, results=null) -> Array:
 	if root == null: root = self
 	if results == null: results = []
@@ -3674,7 +3877,9 @@ func _applyFullSnapshotNow(snapshot: Dictionary, has_spawn_pos: bool) -> void:
 	var quest_node = get_node_or_null("UI/QuestSystem")
 	if is_instance_valid(quest_node) and quest_node.has_method("applyOwnQuestSnapshot"):
 		quest_node.applyOwnQuestSnapshot(snapshot.get("quests", {}))
-
+	var party_node = get_node_or_null("UI/Party")
+	if is_instance_valid(party_node) and !snapshot.get("party", {}).empty():
+		party_node.applyOwnPartySnapshot(snapshot["party"])
 	if !has_spawn_pos:
 		applyOwnStateSnapshot(snapshot.get("state", {}))
 	data_fully_loaded = true

@@ -555,7 +555,6 @@ func getSaveDirectory() -> String:
 var _post_load_snapshot := {}
 var _post_load_guard := false
 
-
 func gatherStatsSnapshot() -> Dictionary:
 	return {
 		"health": health,
@@ -571,8 +570,9 @@ func gatherStatsSnapshot() -> Dictionary:
 		"attributes": attributes.duplicate(true),
 		"statuses": statuses.duplicate(true),
 		"debuff_buffs_active": debuff_buffs_active.duplicate(true),
+		"skill_points": skill_points,
+		"used_skill_points": used_skill_points,
 	}
-
 
 
 
@@ -669,6 +669,19 @@ func _resetRestoredBuffTimers() -> void:
 		buff_data["regen_timer"] = 1.0
 
 
+func wakeMobIfNeeded() -> void:
+	if parent == null or !is_instance_valid(parent):
+		return
+	if "sleeping" in parent:
+		parent.sleeping = false
+	if "_is_relevant" in parent and !parent._is_relevant:
+		parent._is_relevant = true
+		if is_instance_valid(Global):
+			Global.markActive(parent)
+	if "is_frozen" in parent and parent.is_frozen and parent.has_method("unfreezeMob"):
+		parent.unfreezeMob()
+	if "animation_tree" in parent and is_instance_valid(parent.animation_tree) and !parent.animation_tree.active and !("is_dead" in parent and parent.is_dead):
+		parent.animation_tree.active = true
 
 var _statsUpdateOffset:int = -1
 
@@ -676,17 +689,17 @@ func _physics_process(_delta)->void:
 	statsPhyProcess()
 	
 	
-export var stats_proximity_check_range:float = 15.0
+var stats_proximity_check_range:float = 15.0
 func statsPhyProcess()->void:
 	var frame:int = Engine.get_physics_frames()
+	if frame == _last_processed_visual_frame:
+		return
+	_last_processed_visual_frame = frame
+
 	if !isParentPlayer() and !parent.is_in_combat:
-			var visual_frame:int = Engine.get_frames_drawn()
-			if visual_frame == _last_processed_visual_frame:
+		if (frame + _statsUpdateOffset) % 30 == 0:
+			if !isPlayerNearby():
 				return
-			_last_processed_visual_frame = visual_frame
-			if (frame + _statsUpdateOffset) % 30 == 0:
-				if  !isPlayerNearby():
-					return
 	if _statsUpdateOffset == -1:
 		_statsUpdateOffset = int(get_instance_id() % 60)
 	if !isParentPlayer() and isAuthority() and parent.has_method("isRelevantForSync") and !parent.isRelevantForSync():
@@ -725,11 +738,8 @@ func statsPhyProcess()->void:
 
 
 
-
-
 var _last_processed_visual_frame:int = -1
 var _cachedStatsWorld: Node = null
-
 func getCachedStatsWorld() -> Node:
 	if _cachedStatsWorld != null and is_instance_valid(_cachedStatsWorld):
 		return _cachedStatsWorld
@@ -909,7 +919,6 @@ func _reassertPendingRatio() -> void:
 	_has_received_stats_sync = true
 
 	if isParentPlayer():
-		var bar = get_node("../UI/Menu/CharacterBar")
 		if is_instance_valid(bar):
 			bar.updateBars()
 
@@ -926,7 +935,7 @@ func _reassertPendingRatio() -> void:
 
 
 
-onready var bar = get_node("../UI/Menu/CharacterBar")
+onready var bar = get_node_or_null("../UI/Menu/CharacterBar")
 remote func receiveStatsPush(data:Dictionary) -> void:
 	if !parent.has_method("isLocalPlayer") or !parent.isLocalPlayer():
 		return
@@ -1006,22 +1015,10 @@ remote func receiveStatsPush(data:Dictionary) -> void:
 
 
 
-
-
-
-
-
-
 func _applyStatsSnapshotInternal(data: Dictionary) -> void:
 	if data.empty():
 		return
 
-	# Preserve ratios instead of absolute values. If equipment_max_health/etc
-	# haven't been applied yet when this runs (Equipment.updateEquipment()
-	# requires a valid character node and can silently defer), updateAttributes()
-	# below will compute a temporarily-wrong max_health -- clamping the saved
-	# absolute health against that wrong max is what causes the snap-to-30%.
-	# Scaling by ratio keeps "full" showing as full regardless.
 	var saved_max_health = float(data.get("max_health", max_health))
 	var saved_max_energy = float(data.get("max_energy", max_energy))
 	var saved_max_arcane = float(data.get("max_arcane", max_arcane))
@@ -1032,6 +1029,8 @@ func _applyStatsSnapshotInternal(data: Dictionary) -> void:
 	if data.has("experience_points"): experience_points = data["experience_points"]
 	if data.has("level"): level = data["level"]
 	if data.has("available_attribute_points"): available_attribute_points = data["available_attribute_points"]
+	if data.has("skill_points"): skill_points = data["skill_points"]
+	if data.has("used_skill_points"): used_skill_points = data["used_skill_points"]
 
 	var loadedAttributePoints = data.get("attribute_points_spent", {})
 	if loadedAttributePoints is Dictionary:
@@ -1055,8 +1054,6 @@ func _applyStatsSnapshotInternal(data: Dictionary) -> void:
 	health = clamp(health_ratio * max_health, 0.0, max_health)
 	energy = clamp(energy_ratio * max_energy, 0.0, max_energy)
 	arcane = clamp(arcane_ratio * max_arcane, 0.0, max_arcane)
-
-
 
 
 
@@ -1115,8 +1112,20 @@ func saveData():
 
 
 
-
 func _writeStatsDataLocal(saveDirectory:String, data:Dictionary) -> void:
+	# FIX: this ran once per mob (up to ~150 times, spread 1/frame by
+	# World.gd's save queue, but each one was still a synchronous
+	# File.open()/store_var()/close() on the main thread). Route through
+	# the World's background write thread instead, same as every other
+	# save path in the game -- removes 150 potential main-thread stall
+	# points that could each tip physics catch-up into a runaway spiral.
+	var world = getCachedStatsWorld()
+	if is_instance_valid(world) and world.has_method("queueFileWrite"):
+		world.queueFileWrite(saveDirectory + "stats.save", data)
+		return
+
+	# Fallback: only reached if this Stats node has no reachable World
+	# (shouldn't happen in practice) -- keeps the save from being lost.
 	var savePath = saveDirectory + "stats.save"
 	var dir = Directory.new()
 	if !dir.dir_exists(saveDirectory):
@@ -1139,7 +1148,6 @@ remote func requestSaveStatsData(saveDirectory:String, data:Dictionary) -> void:
 func loadData():
 	if isParentPlayer():
 		return
-
 	if !isAuthority():
 		return
 	var savePath = getSaveDirectory() + "stats.save"
@@ -1448,24 +1456,40 @@ func updateStatusGridIfChanged(grid:GridContainer, source) -> void:
 	_last_status_grid_signature[key] = sig
 	updateStatusGrid(grid, source)
 
+var _status_ui_lookup_attempted := false
+
 func updateStatusGrid(grid:GridContainer, source)->void:
-	if !isParentPlayer():return
+	if !isParentPlayer():
+		return
 
-	mob_status_grid=$"../UI/CrossairInspect/MobStatusGrid"
-	player_status_grid=$"../UI/Menu/CharacterBar/PlayerStatusGrid"
-	player_example_icon=$"../UI/Menu/CharacterBar/PlayerStatusGrid/Icon1"
-	mob_example_icon=$"../UI/CrossairInspect/GridContainer/Icon1"
+	if !_status_ui_lookup_attempted:
+		_status_ui_lookup_attempted = true
+		# get_node_or_null instead of $ -- bots have no UI subtree at all,
+		# so this must fail silently instead of erroring, and it must only
+		# ever be attempted ONCE per Stats node instead of on every single
+		# buff/debuff/status call. Retrying a failed $ lookup every combat
+		# tick for every bot is what was spamming the editor console and
+		# causing the "random slideshow" freezes (invisible to the profiler
+		# because the stall is in the editor's own console I/O, not in any
+		# measured script/physics time).
+		mob_status_grid = get_node_or_null("../UI/CrossairInspect/MobStatusGrid")
+		player_status_grid = get_node_or_null("../UI/Menu/CharacterBar/PlayerStatusGrid")
+		player_example_icon = get_node_or_null("../UI/Menu/CharacterBar/PlayerStatusGrid/Icon1")
+		mob_example_icon = get_node_or_null("../UI/CrossairInspect/GridContainer/Icon1")
 
-	if grid==null:return
+	if grid == null:
+		return
 
-	var template:TextureRect=grid.get_node("Icon1")
+	if source == null:
+		return
+
+	var template:TextureRect = grid.get_node("Icon1")
 
 	for child in grid.get_children():
-		if child!=template:child.queue_free()
+		if child != template:
+			child.queue_free()
 
-	template.visible=false
-
-	if source==null:return
+	template.visible = false
 
 	var status_value
 	var icon_instance:TextureRect
@@ -1475,99 +1499,115 @@ func updateStatusGrid(grid:GridContainer, source)->void:
 	var category
 
 	for status_name in source.statuses.keys():
-		status_value=source.statuses[status_name]
+		status_value = source.statuses[status_name]
 
-		if typeof(status_value)==TYPE_ARRAY:
+		if typeof(status_value) == TYPE_ARRAY:
 			for status_entry in status_value:
-				if typeof(status_entry)!=TYPE_DICTIONARY:continue
+				if typeof(status_entry) != TYPE_DICTIONARY:
+					continue
 
 				if !Global.status_icons.has(status_name):
 					if Global.Global.has(status_name):
-						Global.status_icons[status_name]=Global.skills[status_name]
+						Global.status_icons[status_name] = Global.skills[status_name]
 					else:
 						for category_name in ["flasks","weapons","armors"]:
-							category=Global.get(category_name)
-							if category!=null and category.has(status_name):
-								Global.status_icons[status_name]=category[status_name]["icon"]
+							category = Global.get(category_name)
+							if category != null and category.has(status_name):
+								Global.status_icons[status_name] = category[status_name]["icon"]
 								break
-					if !Global.status_icons.has(status_name):continue
+					if !Global.status_icons.has(status_name):
+						continue
 
-				icon_instance=template.duplicate()
-				icon_instance.visible=true
-				icon_instance.texture=load(Global.status_icons[status_name]) if Global.status_icons[status_name] is String else Global.status_icons[status_name]
+				icon_instance = template.duplicate()
+				icon_instance.visible = true
+				icon_instance.texture = load(Global.status_icons[status_name]) if Global.status_icons[status_name] is String else Global.status_icons[status_name]
 
-				duration_label=icon_instance.get_node("Label")
-				if duration_label:duration_label.text=str(int(ceil(status_entry.get("duration",0.0))))
+				duration_label = icon_instance.get_node("Label")
+				if duration_label:
+					duration_label.text = str(int(ceil(status_entry.get("duration",0.0))))
 
-				stack_label=icon_instance.get_node("Stack")
+				stack_label = icon_instance.get_node("Stack")
 				if stack_label:
-					stack_value=0
+					stack_value = 0
 					for entry in status_value:
-						if typeof(entry)==TYPE_DICTIONARY:
-							stack_value+=int(entry.get("stacks",1))
-					stack_label.text="" if stack_value<=1 else str(stack_value)
+						if typeof(entry) == TYPE_DICTIONARY:
+							stack_value += int(entry.get("stacks",1))
+					stack_label.text = "" if stack_value <= 1 else str(stack_value)
 
 				grid.add_child(icon_instance)
 
-		elif typeof(status_value)==TYPE_DICTIONARY:
+		elif typeof(status_value) == TYPE_DICTIONARY:
 			if !Global.status_icons.has(status_name):
 				if Global.skills.has(status_name):
-					Global.status_icons[status_name]=Global.skills[status_name]
+					Global.status_icons[status_name] = Global.skills[status_name]
 				else:
 					for category_name in ["flasks","weapons","armors"]:
-						category=Global.get(category_name)
-						if category!=null and category.has(status_name):
-							Global.status_icons[status_name]=category[status_name]["icon"]
+						category = Global.get(category_name)
+						if category != null and category.has(status_name):
+							Global.status_icons[status_name] = category[status_name]["icon"]
 							break
-				if !Global.status_icons.has(status_name):continue
+				if !Global.status_icons.has(status_name):
+					continue
 
-			icon_instance=template.duplicate()
-			icon_instance.visible=true
-			icon_instance.texture=load(Global.status_icons[status_name]) if Global.status_icons[status_name] is String else Global.status_icons[status_name]
+			icon_instance = template.duplicate()
+			icon_instance.visible = true
+			icon_instance.texture = load(Global.status_icons[status_name]) if Global.status_icons[status_name] is String else Global.status_icons[status_name]
 
-			duration_label=icon_instance.get_node("Label")
-			if duration_label:duration_label.text=str(int(ceil(status_value.get("duration",0.0))))
+			duration_label = icon_instance.get_node("Label")
+			if duration_label:
+				duration_label.text = str(int(ceil(status_value.get("duration",0.0))))
 
-			stack_label=icon_instance.get_node("Stack")
+			stack_label = icon_instance.get_node("Stack")
 			if stack_label:
-				stack_value=int(status_value.get("stacks",1))
-				stack_label.text="" if stack_value<=1 else str(stack_value)
+				stack_value = int(status_value.get("stacks",1))
+				stack_label.text = "" if stack_value <= 1 else str(stack_value)
 
 			grid.add_child(icon_instance)
 
 	for icon_key in source.debuff_buffs_active.keys():
-		status_value=source.debuff_buffs_active[icon_key]
+		status_value = source.debuff_buffs_active[icon_key]
 
 		if !Global.status_icons.has(icon_key):
 			if Global.skills.has(icon_key):
-				Global.status_icons[icon_key]=Global.skills[icon_key]
+				Global.status_icons[icon_key] = Global.skills[icon_key]
 			else:
 				for category_name in ["flasks","weapons","armors"]:
-					category=Global.get(category_name)
-					if category!=null and category.has(icon_key):
-						Global.status_icons[icon_key]=category[icon_key]["icon"]
+					category = Global.get(category_name)
+					if category != null and category.has(icon_key):
+						Global.status_icons[icon_key] = category[icon_key]["icon"]
 						break
-			if !Global.status_icons.has(icon_key):continue
+			if !Global.status_icons.has(icon_key):
+				continue
 
-		icon_instance=template.duplicate()
-		icon_instance.visible=true
-		icon_instance.texture=load(Global.status_icons[icon_key]) if Global.status_icons[icon_key] is String else Global.status_icons[icon_key]
+		icon_instance = template.duplicate()
+		icon_instance.visible = true
+		icon_instance.texture = load(Global.status_icons[icon_key]) if Global.status_icons[icon_key] is String else Global.status_icons[icon_key]
 
-		duration_label=icon_instance.get_node("Label")
-		if duration_label:duration_label.text=str(int(ceil(status_value.get("duration",0.0))))
+		duration_label = icon_instance.get_node("Label")
+		if duration_label:
+			duration_label.text = str(int(ceil(status_value.get("duration",0.0))))
 
-		stack_label=icon_instance.get_node("Stack")
+		stack_label = icon_instance.get_node("Stack")
 		if stack_label:
 			if status_value.has("stackable") and !status_value["stackable"]:
-				stack_label.text=""
+				stack_label.text = ""
 			else:
-				stack_value=int(status_value.get("stacks",1))
-				stack_label.text="" if stack_value<=1 else str(stack_value)
+				stack_value = int(status_value.get("stacks",1))
+				stack_label.text = "" if stack_value <= 1 else str(stack_value)
 
 		grid.add_child(icon_instance)
 
+var _last_buff_tick_ms:int = 0
 
 func tickBuffsDebuffs()->void:
+	var now_ms:int=OS.get_ticks_msec()
+	var elapsed_seconds:float=1.0
+	if _last_buff_tick_ms!=0:
+		elapsed_seconds=float(now_ms-_last_buff_tick_ms)/1000.0
+		if elapsed_seconds<=0.0:elapsed_seconds=1.0
+		elapsed_seconds=min(elapsed_seconds,30.0) # cap so one freak stall can't insta-wipe every buff
+	_last_buff_tick_ms=now_ms
+
 	var buff_keys=debuff_buffs_active.keys()
 
 	for buff_name in buff_keys:
@@ -1579,9 +1619,9 @@ func tickBuffsDebuffs()->void:
 		var source_id=int(buff_data.get("source_id",0))
 		var source=instance_from_id(source_id) if source_id!=0 else parent
 
-		var duration=float(buff_data.get("duration",0.0))-1.0
+		var duration=float(buff_data.get("duration",0.0))-elapsed_seconds
 		buff_data["duration"]=duration
-		buff_data["regen_timer"]=float(buff_data.get("regen_timer",1.0))-1.0
+		buff_data["regen_timer"]=float(buff_data.get("regen_timer",1.0))-elapsed_seconds
 
 		if duration<=0.0:
 			debuff_buffs_active.erase(buff_name)
@@ -1593,7 +1633,7 @@ func tickBuffsDebuffs()->void:
 		if dot_interval<=0.0:dot_interval=1.0
 
 		if damage_type!=null and damage_amount>0.0:
-			var dot_timer=float(buff_data.get("dot_timer",dot_interval))-1.0
+			var dot_timer=float(buff_data.get("dot_timer",dot_interval))-elapsed_seconds
 			buff_data["dot_timer"]=dot_timer
 
 			while dot_timer<=0.0:
@@ -1603,13 +1643,16 @@ func tickBuffsDebuffs()->void:
 			buff_data["dot_timer"]=dot_timer
 
 		var heal=float(buff_data.get("regen health",0.0))
-		if heal>0.0:getHeal(parent,heal)
+		if heal>0.0:getHeal(parent,heal*elapsed_seconds)
 
 		var energy_reg=float(buff_data.get("regen energy",0.0))
 		if energy_reg>0.0:
-			self.energy+=energy_reg
-			if self.energy>self.max_energy:self.energy=self.max_energy
-
+			energy+=energy_reg*elapsed_seconds
+			if energy>max_energy:energy=max_energy
+		var arcane_reg=float(buff_data.get("regen arcane",0.0))
+		if arcane_reg>0.0:
+			arcane+=arcane_reg*elapsed_seconds
+			if arcane>max_arcane:arcane=max_arcane
 		var inst_h=float(buff_data.get("instant regen health",0.0))
 		if inst_h>0.0:
 			getHeal(parent,inst_h)
@@ -1620,8 +1663,6 @@ func tickBuffsDebuffs()->void:
 			self.energy+=inst_e
 			if self.energy>self.max_energy:self.energy=self.max_energy
 			buff_data["instant regen energy"]=0.0
-
-
 
 func isBeneficialStatus(status_name:String)->bool:
 	for skill_name in Global.status_effects:
@@ -1673,6 +1714,17 @@ func _applyBuffDebuffLocal(buff_name:String, source:Node)->void:
 		var buff_multiplier=lerp(0.25,1.5,inverse_lerp(0.25,2.0,tenacity))
 		raw_duration*=buff_multiplier
 
+	# FIX: _last_buff_tick_ms only advances inside tickBuffsDebuffs(), which
+	# only runs while debuff_buffs_active is non-empty. If no buff has been
+	# active for a while, that clock goes stale. Applying a brand new buff
+	# after such a gap meant the very next tick computed elapsed_seconds as
+	# the ENTIRE stale gap (capped at 30s) and subtracted that from the
+	# fresh duration in one shot -- instantly killing a 15s buff. Resetting
+	# the clock here, exactly when going from no-buffs to having one,
+	# makes the first real tick see ~0 elapsed instead.
+	if debuff_buffs_active.empty():
+		_last_buff_tick_ms = OS.get_ticks_msec()
+
 	if debuff_buffs_active.has(buff_name):
 		debuff_buffs_active[buff_name]["duration"]=raw_duration
 		if stackable:
@@ -1719,7 +1771,6 @@ func _applyBuffDebuffLocal(buff_name:String, source:Node)->void:
 	if isParentPlayer() and is_instance_valid(bar):
 		bar.updateBars()
 	_pushStatsToOwner()
-
 
 var statuses={}
 var status_attribute_modifiers={}
@@ -2127,20 +2178,16 @@ func computeSkillLevelUncached(skill_name:String) -> int:
 	if skill_texture == null:
 		return 0
 
-	for index in range(1,10):
-		var control = root.get_node_or_null("SkillsTreeHolder"+str(index)+"/Control")
-		if control == null:
+	var control =  $"../UI/SkillTreeRoot/SkillTree/Control/MoveThis"
+	for child in control.get_children():
+		if !(child is TextureButton):
+			continue
+		if !child.has_node("Slot"):
 			continue
 
-		for child in control.get_children():
-			if !(child is TextureButton):
-				continue
-			if !child.has_node("Slot"):
-				continue
-
-			var slot = child.get_node("Slot")
-			if slot.texture == skill_texture:
-				return child.skill_level
+		var slot = child.get_node("Slot")
+		if slot.texture == skill_texture:
+			return child.skill_level
 
 	return 0
 
@@ -2268,6 +2315,7 @@ var charged_attack_stacks = {
 }
 var _skill_damage_cache: Dictionary = {} # "skillname|charge_stacks" -> Dictionary
 
+
 func dealDamage():
 	if parent.is_in_group("Entity") and "is_in_combat" in parent:
 		parent.is_in_combat = true
@@ -2304,8 +2352,10 @@ func dealDamage():
 		return
 
 	var skill_name:String = parent.current_skill
-	var skill_level_mult:float = getSkillLevelMultiplier(skill_name)
 
+
+
+	var skill_level_mult:float = getSkillLevelMultiplier(skill_name)
 	var charge_stacks:int = 0
 	if charged_attack_stacks.has(skill_name):
 		charge_stacks = int(charged_attack_stacks[skill_name].stacks)
@@ -2322,38 +2372,15 @@ func dealDamage():
 				skill_damages[dmg_type] += skill_damages[dmg_type] * (charge_stacks * data.multiplier)
 		_skill_damage_cache[cache_key] = skill_damages.duplicate()
 
-	var damages = {}
-
-	for dmg_type in skill_damages:
-		var type_index:int = int(dmg_type)
-		var mult = dmgMultByType[type_index] if type_index < dmgMultByType.size() else 1.0
-		var type_name = DMG_TYPE_NAMES[type_index] if type_index < DMG_TYPE_NAMES.size() else ""
-		var flat_add = flat_damage_bonus.get(type_name,0.0) + damage_flat_modifier.get(type_name,0.0)
-
-		damages[dmg_type] = (skill_damages[dmg_type] * mult * skill_level_mult) + flat_add
-		if isParentPlayer():
-			if parent.weapons==parent.WeaponMode.NONE and skill_name=="combo attack":
-				var total=0.0
-				for t in damages: total+=damages[t]
-				damages={Global.Type.blunt:total}
-
-	if isParentPlayer() and parent.weapons==parent.WeaponMode.DUAL:
-		for dmg_type in damages:
-			if parent.current_skill == "combo attack" or parent.WeaponMode.NONE:
-				damages[dmg_type] *= 0.5
-
 	var my_stats = parent.get_node("Stats")
 	var my_species = my_stats.species if my_stats != null else ""
 
-	var base_pen_chance = my_stats.derived_stats.get("penetrating_hit_chance", 0.0)
-	var is_penetrating_hit = randf() <= clamp(base_pen_chance + Global.skill_penetration_chance.get(skill_name.to_lower(), 0.0), 0.0, 1.0)
+	var base_pen_chance = my_stats.derived_stats.get("penetrating_hit_chance",0.0)
+	var is_penetrating_hit = randf() <= clamp(base_pen_chance + Global.skill_penetration_chance.get(skill_name.to_lower(),0.0),0.0,1.0)
 
 	var is_crit = my_stats != null and randf() <= my_stats.derived_stats["crit_chance"]
-	if is_crit:for dmg_type in damages:damages[dmg_type] *= my_stats.derived_stats["crit_damage"]
 
-	var total_damage:int= 0
-	for v in damages.values():
-		total_damage += v
+	var total_damage:int = 0
 
 	var can_chat = !parent.is_in_group("BOT") and isParentPlayer() and Global.canSendCombatChatMessage(parent.get_network_master())
 
@@ -2362,12 +2389,51 @@ func dealDamage():
 			continue
 		if !Global.canHitEnemy(parent,body):
 			continue
+		if Global.skill_dmg_immunity.has(body.current_skill):
+			continue
+
 		var other_stats = body.stats
+
+		# Target-based special effects are calculated separately for each target.
+		var special_mult:float = Global.getSpecialDamageMultiplier(skill_name,self,other_stats)
+		var special_flat_damage:float = Global.getSpecialFlatDamage(skill_name,other_stats)
+
+		var damages = {}
+
+		for dmg_type in skill_damages:
+			var type_index:int = int(dmg_type)
+			var mult = dmgMultByType[type_index] if type_index < dmgMultByType.size() else 1.0
+			var type_name = DMG_TYPE_NAMES[type_index] if type_index < DMG_TYPE_NAMES.size() else ""
+			var flat_add = flat_damage_bonus.get(type_name,0.0) + damage_flat_modifier.get(type_name,0.0)
+
+			damages[dmg_type] = (skill_damages[dmg_type] * mult * skill_level_mult * special_mult) + flat_add + special_flat_damage
+
+		if isParentPlayer():
+			if parent.weapons==parent.WeaponMode.NONE and skill_name=="combo attack":
+				var total=0.0
+				for t in damages:
+					total+=damages[t]
+				damages={Global.Type.blunt:total}
+
+		if isParentPlayer() and parent.weapons==parent.WeaponMode.DUAL:
+			for dmg_type in damages:
+				if parent.current_skill == "combo attack" or parent.WeaponMode.NONE:
+					damages[dmg_type] *= 0.5
+
+		if is_crit:
+			for dmg_type in damages:
+				damages[dmg_type] *= my_stats.derived_stats["crit_damage"]
+
+		var target_total_damage:int = 0
+		for v in damages.values():
+			target_total_damage += int(v)
+		total_damage += target_total_damage
+
 		if is_instance_valid(other_stats) and Global.debuffs_buffs.has(skill_name):
-			if Global.debuffs_buffs[skill_name].get("malus", true):
-				other_stats.applyBuffDebuff(skill_name, parent)
+			if Global.debuffs_buffs[skill_name].get("malus",true):
+				other_stats.applyBuffDebuff(skill_name,parent)
 			else:
-				applyBuffDebuff(skill_name, parent)
+				applyBuffDebuff(skill_name,parent)
 
 		if other_stats != null:
 			var extra_threat = Global.skill_extra_aggro.get(skill_name.to_lower(),0.0)
@@ -2406,8 +2472,6 @@ func dealDamage():
 				elif hit.flank:
 					tag = " flank"
 
-			if Global.skill_dmg_immunity.has(parent.current_skill):
-				return
 			var chat = parent.chat
 			var hit = body.get_meta("last_hit_data") if body.has_meta("last_hit_data") else null
 
@@ -2418,21 +2482,24 @@ func dealDamage():
 					formatted_damage += str(value) + " " + damageTypeToString(int(dmg_type)) + " "
 				formatted_damage = formatted_damage.strip_edges()
 			else:
-				formatted_damage = str(int(total_damage))
+				formatted_damage = str(target_total_damage)
 
 			if skill_name == "none":
 				chat.sendSystemMessage(attacker_name + " dealt " + formatted_damage + " damage to " + victim_name + tag)
 			else:
 				chat.sendSystemMessage(attacker_name + " dealt " + formatted_damage + " damage to " + victim_name + " " + skill_name + tag)
 
-	for attack_name in charged_attack_stacks:charged_attack_stacks[attack_name]["stacks"] = 0
+	for attack_name in charged_attack_stacks:
+		charged_attack_stacks[attack_name]["stacks"] = 0
+
 	if !parent.is_in_group("BOT") and isParentPlayer():
 		if is_instance_valid(parent.skillbar) and "active_cooldowns" in parent.skillbar:
-			Global.applyOnHitEffects(parent.current_skill, active_on_hit_effects, parent.skillbar.active_cooldowns, self, total_damage)
+			Global.applyOnHitEffects(parent.current_skill,active_on_hit_effects,parent.skillbar.active_cooldowns,self,total_damage)
+
 	if "active_cooldowns" in parent:
-		Global.applyOnHitEffects(parent.current_skill, Global.on_hit_effects, parent.active_cooldowns, self, total_damage)
+		Global.applyOnHitEffects(parent.current_skill,Global.on_hit_effects,parent.active_cooldowns,self,total_damage)
 	elif "skill_cooldowns" in parent:
-		Global.applyOnHitEffects(parent.current_skill, Global.on_hit_effects, parent.skill_cooldowns, self, total_damage)
+		Global.applyOnHitEffects(parent.current_skill,Global.on_hit_effects,parent.skill_cooldowns,self,total_damage)
 
 
 var flank_dmg_multiplier:float = 1.25
@@ -2475,6 +2542,7 @@ func applyHit(attacker:Node,damages:Dictionary,is_penetrating_hit:bool = false,e
 		attacker=attacker.get_parent()
 	if attacker != null and !is_instance_valid(attacker):
 		attacker = null
+	wakeMobIfNeeded()
 	parent.is_in_combat=true
 	var facing_multiplier = 1.0
 
@@ -2752,15 +2820,17 @@ func _applyDamagedFromDebuff(attacker:Node,debuff_name,damages:Dictionary,is_pen
 		if parent and "stats" in parent and parent.stats.health>0:attacker.stored_body=parent
 		else:attacker.stored_body=null
 	broadcastDamageText(final_damages, is_crit, is_penetrating_hit, attacker)
-	if isParentPlayer() and !parent.is_in_group("BOT"):
+	if isParentPlayer() and !parent.is_in_group("BOT") and parent.get_parent() is KinematicBody and "entity_name" in parent.get_parent():
+		var body=parent.get_parent()
 		var chat=parent.chat
-		var victim_name=parent.entity_name
-		if victim_name.strip_edges()=="":victim_name=(parent.get_node_or_null("Stats").species if parent.get_node_or_null("Stats") else "")
-		var attacker_name=(attacker.entity_name if attacker else "null")
-		if attacker:
-			if attacker_name.strip_edges()=="":
-				var astats=attacker.get_node_or_null("Stats")
-				attacker_name=(astats.species if astats and astats.species!="" else "debuff")
+		var victim_name=body.entity_name
+		if victim_name.strip_edges()=="":
+			var stats=body.get_node_or_null("Stats")
+			victim_name=stats.species if stats and stats.species!="" else ""
+		var attacker_name=attacker.entity_name if attacker and "entity_name" in attacker else "null"
+		if attacker and attacker_name.strip_edges()=="":
+			var astats=attacker.get_node_or_null("Stats")
+			attacker_name=astats.species if astats and astats.species!="" else "debuff"
 		if chat and chat.has_method("sendSystemMessage"):
 			chat.sendSystemMessage("%s took %s damage from %s %s"%[victim_name,dmgText(total_damage),attacker_name,debuff_name])
 	if is_instance_valid($"../UI/Menu/CharacterBar"):$"../UI/Menu/CharacterBar".updateBars()
@@ -3066,6 +3136,8 @@ func selfBuff():
 						
 						
 						
+var loot_owner_names := [] # entity_names allowed to loot this corpse (killer + killer's party)
+
 var _death_xp_granted := false
 func getKilled(attacker:Node = null) -> void:
 	if health <= 0:
@@ -3088,8 +3160,9 @@ func getKilled(attacker:Node = null) -> void:
 					Global.setAnimLock(parent, "downed", true)
 					parent.is_downed = true
 		else:
+			if loot_owner_names.empty():
+				loot_owner_names = Global.computeLootOwners(attacker)
 			grantKillExperience(attacker)
-
 
 func grantKillExperience(attacker:Node) -> void:
 	if _death_xp_granted:
